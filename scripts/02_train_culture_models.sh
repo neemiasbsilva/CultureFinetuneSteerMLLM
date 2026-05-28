@@ -1,12 +1,9 @@
 #!/usr/bin/env bash
-# Stage 2 — WVS text-only LoRA fine-tuning
+# Stage 2 — WVS text-only LoRA fine-tuning (cultural condition only)
 #
-# For each architecture, trains:
-#   - 9 cultural models  (WVS Q&A with culture-specific system prompt)
-#   - 9 baseline models  (same WVS Q&A with neutral system prompt)
-#
-# Annotation in Stage 3 uses these adapters with a neutral inference prompt.
-# Evaluation in Stage 4 compares annotation quality against σ₃P₅ labels.
+# For each architecture, trains one cultural model per culture using
+# WVS Q&A with a culture-specific system prompt.
+# Training resumes automatically from the latest checkpoint if one exists.
 #
 # Backend selection:
 #   - "mlx"  → train_mlx.py  (Apple Silicon only)
@@ -15,19 +12,16 @@
 #
 # ENV overrides:
 #   MODELS="qwen_vl gemma4 phi4 gemma4_e4b gemma4_31b qwen3_vl_8b qwen3_vl_30b"
-#   CULTURES="arabic chinese english"     — subset of cultures
-#   CONDITIONS="cultural baseline"        — which conditions to run
+#   CULTURES="arabic chinese english"  — subset of cultures
 
 set -euo pipefail
 
 MODELS="${MODELS:-gemma4 phi4 gemma4_e4b gemma4_31b qwen3_vl_8b qwen3_vl_30b}"
 CULTURES="${CULTURES:-arabic bengali chinese english german korean portuguese spanish turkish}"
-CONDITIONS="${CONDITIONS:-cultural baseline}"
 
 echo "=== culture-mllm: WVS Fine-Tuning ==="
 echo "Models     : $MODELS"
 echo "Cultures   : $CULTURES"
-echo "Conditions : $CONDITIONS"
 
 # Detect if MLX is available (Apple Silicon only)
 MLX_AVAILABLE=$(uv run python -c "import mlx" 2>/dev/null && echo "yes" || echo "no")
@@ -55,10 +49,8 @@ for MODEL in $MODELS; do
   fi
 
   for CULTURE in $CULTURES; do
-    for CONDITION in $CONDITIONS; do
-      echo "  Training: $MODEL / $CULTURE / $CONDITION"
-      $TRAIN_CMD --config "$CONFIG" --culture "$CULTURE" --condition "$CONDITION"
-    done
+    echo "  Training: $MODEL / $CULTURE / cultural"
+    $TRAIN_CMD --config "$CONFIG" --culture "$CULTURE"
   done
   echo ""
 done
