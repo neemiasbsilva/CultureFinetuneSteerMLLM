@@ -88,3 +88,4 @@ wandb/
 # Misc
 *.tmp
 *.temp
+*.zip
