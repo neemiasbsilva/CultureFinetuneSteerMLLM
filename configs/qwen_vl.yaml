@@ -1,0 +1,49 @@
+model:
+  id: "Qwen/Qwen3.5-2B"
+  mlx_id: "mlx-community/Qwen3.5-2B-4bit"
+  backend: "mlx"           # "mlx" | "hf_mps"
+  dtype: "bfloat16"
+  image_max_pixels: 200704  # 448×448 — reduces VRAM during training
+
+lora:
+  r: 8
+  alpha: 16
+  dropout: 0.05
+  layers: 8
+  target_modules:
+    - "q_proj"
+    - "v_proj"
+    - "k_proj"
+    - "o_proj"
+
+training:
+  batch_size: 1
+  gradient_accumulation: 8     # effective batch = 8
+  max_epochs: 250
+  learning_rate: 2.0e-4
+  lr_schedule: "cosine_decay"
+  warmup_steps: 50
+  early_stopping_patience: 15
+  early_stopping_min_epochs: 20
+  max_seq_len: 512
+  logging_steps: 25
+  eval_steps: 100
+  save_steps: 100
+  max_grad_norm: 0.3
+
+cultures:
+  - arabic
+  - bengali
+  - chinese
+  - english
+  - german
+  - korean
+  - portuguese
+  - spanish
+  - turkish
+
+n_folds: 5
+
+mlflow:
+  experiment: "emnlp26_culturevlm_training"
+  tracking_uri: "http://127.0.0.1:5000"

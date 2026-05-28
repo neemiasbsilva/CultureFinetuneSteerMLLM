@@ -1,0 +1,50 @@
+model:
+  id: "microsoft/Phi-4-multimodal-instruct"
+  mlx_id: "mlx-community/Phi-4-multimodal-instruct-4bit"
+  backend: "hf_mps"        # HF+MPS fallback — MLX support may be limited
+  dtype: "bfloat16"
+  image_max_pixels: 150528  # 336×448 — reduced for 16GB headroom
+
+lora:
+  r: 8
+  alpha: 16
+  dropout: 0.05
+  layers: 6                # fewer layers for memory savings
+  target_modules:
+    - "q_proj"
+    - "v_proj"
+    - "k_proj"
+    - "o_proj"
+
+training:
+  batch_size: 1
+  gradient_accumulation: 16    # effective batch = 16 (more accumulation for larger model)
+  max_epochs: 250
+  learning_rate: 1.0e-4        # lower LR for larger model
+  lr_schedule: "cosine"
+  warmup_steps: 100
+  early_stopping_patience: 15
+  early_stopping_min_epochs: 20
+  max_seq_len: 512
+  logging_steps: 25
+  eval_steps: 100
+  save_steps: 100
+  max_grad_norm: 0.3
+  gradient_checkpointing: true  # required for 5.6B on 16GB
+
+cultures:
+  - arabic
+  - bengali
+  - chinese
+  - english
+  - german
+  - korean
+  - portuguese
+  - spanish
+  - turkish
+
+n_folds: 5
+
+mlflow:
+  experiment: "emnlp26_culturevlm_training"
+  tracking_uri: "http://127.0.0.1:5000"
