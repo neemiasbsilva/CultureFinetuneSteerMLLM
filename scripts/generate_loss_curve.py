@@ -24,15 +24,22 @@ import mlflow
 REPO_ROOT = Path(__file__).resolve().parents[1]
 MLFLOW_URI = f"sqlite:///{REPO_ROOT}/mlflow.db"
 
-# Colours matching the paper's pastel palette
-TRAIN_COLOR = "#FD4F4F"   # pal4-ish
-VAL_COLOR   = "#5BAD75"   # pal3-ish
+TRAIN_COLOR = "#FD4F4F"
+VAL_COLOR   = "#5BAD75"
 
 EPOCH_STEPS = [1890, 3780]
 TOTAL_STEPS = 5670
 
 
 def fetch_metrics(run_id: str) -> tuple[list, list, list, list]:
+    """Fetch train and validation loss histories from MLflow.
+
+    Args:
+        run_id (str): MLflow run ID.
+
+    Returns:
+        tuple: (train_steps, train_values, val_steps, val_values), each a list.
+    """
     client = mlflow.MlflowClient(MLFLOW_URI)
     tl = sorted(client.get_metric_history(run_id, "train_loss"), key=lambda m: m.step)
     vl = sorted(client.get_metric_history(run_id, "val_loss"),   key=lambda m: m.step)
@@ -43,6 +50,19 @@ def fetch_metrics(run_id: str) -> tuple[list, list, list, list]:
 
 
 def find_run_id(culture: str, condition: str, model: str) -> str:
+    """Look up an MLflow run ID by culture, condition, and model tags.
+
+    Args:
+        culture (str): Culture tag value (e.g., "arabic").
+        condition (str): Condition tag value (e.g., "cultural").
+        model (str): Model name tag value (e.g., "qwen3_5_2b").
+
+    Returns:
+        str: The run ID of the first matching run.
+
+    Raises:
+        ValueError: If no matching run is found.
+    """
     client = mlflow.MlflowClient(MLFLOW_URI)
     exps   = client.search_experiments()
     exp_id = next(e.experiment_id for e in exps if "culturevlm" in e.name)
@@ -66,9 +86,19 @@ def plot(
     culture: str = "Arabic",
     condition: str = "cultural",
 ) -> None:
+    """Render and save a publication-ready loss-curve PDF.
+
+    Args:
+        train_steps (list): Step indices for training loss.
+        train_vals (list): Training loss values.
+        val_steps (list): Step indices for validation loss.
+        val_vals (list): Validation loss values.
+        out_path (Path): Destination PDF path.
+        culture (str, optional): Culture label for the title. Defaults to "Arabic".
+        condition (str, optional): Condition label for the title. Defaults to "cultural".
+    """
     fig, ax = plt.subplots(figsize=(7.2, 3.0))
 
-    # --- curves ---
     ax.plot(train_steps, train_vals,
             color=TRAIN_COLOR, linewidth=1.3, label="Train loss (every 25 steps)")
     ax.plot(val_steps, val_vals,
@@ -76,12 +106,11 @@ def plot(
             marker="o", markersize=2.0, markevery=5,
             label="Val loss (every 100 steps)")
 
-    # --- axes (set first so annotations use final limits) ---
+    # Set axes before annotations so final limits are in effect.
     ax.set_xlim(0, TOTAL_STEPS + 50)
     ymax = min(4.0, max(max(train_vals), max(val_vals)) * 1.15)
     ax.set_ylim(0, ymax)
 
-    # --- epoch boundaries ---
     for step in EPOCH_STEPS:
         ax.axvline(step, color="black", linewidth=0.7, linestyle="--", alpha=0.45)
     ax.text(EPOCH_STEPS[0] + 30, ymax * 0.97,
@@ -89,7 +118,6 @@ def plot(
     ax.text(EPOCH_STEPS[1] + 30, ymax * 0.97,
             "Epoch 3", fontsize=6.5, color="#555555", va="top")
 
-    # --- final-value annotations ---
     final_tl = train_vals[-1]
     final_vl = val_vals[-1]
     bbox = dict(boxstyle="round,pad=0.2", facecolor="white",
@@ -107,7 +135,6 @@ def plot(
                 arrowprops=dict(arrowstyle="-", color="#aaaaaa", lw=0.6),
                 bbox=bbox)
 
-    # --- spike annotation ---
     spike_y = min(ymax * 0.94, 3.6)
     ax.annotate("spike\nclipped", xy=(200, spike_y),
                 xytext=(370, spike_y - 0.3),
@@ -136,7 +163,7 @@ def main() -> None:
                         help="Full MLflow run ID (auto-detected if omitted)")
     parser.add_argument("--culture",   default="arabic")
     parser.add_argument("--condition", default="cultural")
-    parser.add_argument("--model",     default="qwen_vl")
+    parser.add_argument("--model",     default="qwen3_5_2b")
     parser.add_argument("--out",       default=None,
                         help="Output PDF path (default: outputs/figures/loss_curve_<culture>_<condition>.pdf)")
     args = parser.parse_args()
