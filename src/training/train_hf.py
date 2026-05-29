@@ -50,6 +50,14 @@ CHECKPOINTS_DIR = Path("checkpoints")
 
 
 def load_config(config_path: str) -> dict:
+    """Load a YAML training config.
+
+    Args:
+        config_path (str): Path to the YAML config file.
+
+    Returns:
+        dict: Parsed configuration.
+    """
     with open(config_path) as f:
         return yaml.safe_load(f)
 
@@ -86,6 +94,42 @@ def _find_last_checkpoint(output_dir: str) -> str | None:
 
 
 _MLFLOW_RUN_ID_FILE = "mlflow_run_id.txt"
+_DONE_SENTINEL = "TRAINING_DONE"
+
+
+def _is_training_complete(output_dir: str, run_name: str = "", experiment_name: str = "") -> bool:
+    """Return True if training is done.
+
+    Checks the local sentinel file first (fast path), then falls back to
+    querying MLflow for a FINISHED run with the given name — needed for runs
+    that completed before the sentinel system was introduced.
+    If MLflow confirms completion, the sentinel is written so future checks
+    are instant.
+    """
+    if (Path(output_dir) / _DONE_SENTINEL).exists():
+        return True
+    if run_name and experiment_name:
+        try:
+            from mlflow.tracking import MlflowClient
+            client = MlflowClient()
+            exp = client.get_experiment_by_name(experiment_name)
+            if exp:
+                hits = client.search_runs(
+                    experiment_ids=[exp.experiment_id],
+                    filter_string=f"run_name = '{run_name}' and attributes.status = 'FINISHED'",
+                    max_results=1,
+                )
+                if hits:
+                    Path(output_dir).mkdir(parents=True, exist_ok=True)
+                    _mark_training_complete(output_dir)
+                    return True
+        except Exception:
+            pass
+    return False
+
+
+def _mark_training_complete(output_dir: str) -> None:
+    (Path(output_dir) / _DONE_SENTINEL).touch()
 
 
 def _load_mlflow_run_id(output_dir: str) -> str | None:
@@ -100,12 +144,13 @@ def _save_mlflow_run_id(output_dir: str, run_id: str) -> None:
 
 
 def _resume_mlflow_run(output_dir: str, run_name: str):
-    """Return (run_id_to_use, is_new) after ensuring the saved run is resumable.
+    """Return (run_id_to_use, is_new).
 
-    When a run ends (FINISHED/FAILED/KILLED), MLflow refuses to re-enter it
-    via start_run(run_id=...) and silently creates a new one instead.
-    We fix this by explicitly resetting the status to RUNNING via the client
-    before handing the run_id back to start_run.
+    Always reuses the saved run — resetting it to RUNNING if needed — so that
+    every restart continues the same MLflow trace regardless of whether the
+    previous session ended via Ctrl+C (FAILED) or a crash (RUNNING).
+    A new run is only created when no saved run_id exists or the ID is gone
+    from the server.
     """
     from mlflow.tracking import MlflowClient
 
@@ -113,24 +158,35 @@ def _resume_mlflow_run(output_dir: str, run_name: str):
     if saved_run_id:
         try:
             client = MlflowClient()
-            run = client.get_run(saved_run_id)
-            if run.info.status != "RUNNING":
+            status = client.get_run(saved_run_id).info.status
+            if status != "RUNNING":
                 client.update_run(saved_run_id, status="RUNNING")
-            console.print(f"  Continuing MLflow run [bold]{saved_run_id}[/bold]")
+            console.print(f"  Continuing MLflow run [bold]{saved_run_id}[/bold] (was {status})")
             return saved_run_id, False
         except Exception as exc:
-            console.print(f"  [yellow]Cannot resume MLflow run {saved_run_id} ({exc}) — starting new run[/yellow]")
+            console.print(f"  [yellow]Cannot reopen MLflow run {saved_run_id} ({exc}) — starting new run[/yellow]")
     return None, True
 
 
 def preprocess_logits_for_metrics(logits, labels):
-    # Reduce full vocab logits to predicted token IDs before accumulation to avoid OOM
+    """Reduce full-vocab logits to predicted token IDs before accumulation.
+
+    Avoids OOM when storing logits for the full vocabulary across eval batches.
+    """
     if isinstance(logits, tuple):
         logits = logits[0]
     return logits.argmax(-1)
 
 
-def compute_metrics_fn(eval_preds):
+def compute_metrics_fn(eval_preds) -> dict:
+    """Compute macro-averaged F1 over non-padding tokens.
+
+    Args:
+        eval_preds: (predictions, labels) tuple from the Trainer.
+
+    Returns:
+        dict: {"eval_f1_macro": float}
+    """
     preds, labels = eval_preds
     preds = preds.flatten()
     labels = labels.flatten()
@@ -153,9 +209,36 @@ def _build_quantization_config(train_cfg: dict, device: str):
 
 
 def train(cfg: dict, model_name: str, culture: str, debug: bool) -> None:
+    """Run LoRA fine-tuning for one (model, culture) pair.
+
+    Resumes from the latest checkpoint and reuses the existing MLflow run
+    if both exist. Marks completion via a sentinel file to allow idempotent
+    reruns from the orchestration script.
+
+    Args:
+        cfg (dict): Parsed YAML config (model, lora, training, mlflow sections).
+        model_name (str): Config stem used as a directory name and run tag.
+        culture (str): Target culture (e.g., "arabic").
+        debug (bool): If True, run only 1 epoch for fast iteration.
+    """
     model_cfg = cfg["model"]
     lora_cfg = cfg["lora"]
     train_cfg = cfg["training"]
+
+    output_dir = str(CHECKPOINTS_DIR / culture / model_name / "cultural")
+    run_name   = f"{model_name}_{culture}_cultural"
+
+    # Set tracking URI before the completion check so the MLflow query works.
+    tracking_uri     = cfg.get("mlflow", {}).get("tracking_uri", "http://127.0.0.1:5000")
+    experiment_name  = cfg["mlflow"]["experiment"]
+    mlflow.set_tracking_uri(tracking_uri)
+    mlflow.set_experiment(experiment_name)
+    os.environ["MLFLOW_TRACKING_URI"]    = tracking_uri
+    os.environ["MLFLOW_EXPERIMENT_NAME"] = experiment_name
+
+    if _is_training_complete(output_dir, run_name, experiment_name):
+        console.print(f"[dim]Skipping {model_name}/{culture} — already FINISHED in MLflow[/dim]")
+        return
 
     device = get_device()
     console.print(f"Device    : [bold]{device}[/bold]")
@@ -165,7 +248,6 @@ def train(cfg: dict, model_name: str, culture: str, debug: bool) -> None:
     if quant_cfg is not None:
         console.print("  [yellow]4-bit QLoRA active (bitsandbytes)[/yellow]")
 
-    # flash_attention_2 on CUDA if installed, eager otherwise
     try:
         import flash_attn  # noqa: F401
         attn_impl = "flash_attention_2" if device == "cuda" else "eager"
@@ -209,20 +291,12 @@ def train(cfg: dict, model_name: str, culture: str, debug: bool) -> None:
     train_dataset = load_hf_dataset(train_jsonl)
     val_dataset = load_hf_dataset(val_jsonl) if val_jsonl and val_jsonl.exists() else None
 
-    output_dir = str(CHECKPOINTS_DIR / culture / model_name / "cultural")
     Path(output_dir).mkdir(parents=True, exist_ok=True)
 
     last_checkpoint = _find_last_checkpoint(output_dir)
     if last_checkpoint:
         console.print(f"  Resuming from checkpoint [bold]{last_checkpoint}[/bold]")
 
-    tracking_uri = cfg.get("mlflow", {}).get("tracking_uri", "http://127.0.0.1:5000")
-    mlflow.set_tracking_uri(tracking_uri)
-    mlflow.set_experiment(cfg["mlflow"]["experiment"])
-    os.environ["MLFLOW_TRACKING_URI"] = tracking_uri
-    os.environ["MLFLOW_EXPERIMENT_NAME"] = cfg["mlflow"]["experiment"]
-
-    run_name = f"{model_name}_{culture}_cultural"
     resume_run_id, is_new = _resume_mlflow_run(output_dir, run_name)
     with mlflow.start_run(run_id=resume_run_id, run_name=run_name if is_new else None) as active_run:
         if is_new:
@@ -272,6 +346,8 @@ def train(cfg: dict, model_name: str, culture: str, debug: bool) -> None:
         )
 
         class _EarlyStopCallback(TrainerCallback):
+            """Trainer callback that triggers early stopping via EarlyStopping."""
+
             def on_evaluate(self, args, state, control, metrics, **kwargs):
                 val_f1 = metrics.get("eval_f1_macro", 0.0)
                 epoch = int(state.epoch or 0)
@@ -288,6 +364,7 @@ def train(cfg: dict, model_name: str, culture: str, debug: bool) -> None:
         trainer.train(resume_from_checkpoint=last_checkpoint)
         trainer.save_model(output_dir)
         processor.save_pretrained(output_dir)
+        _mark_training_complete(output_dir)
         console.print(f"[bold green]✓ Saved to {output_dir}[/bold green]")
 
 
