@@ -8,14 +8,14 @@
 #   3) culture-specific identity-framing effects.
 #
 # ENV overrides:
-#   MODELS="qwen_vl phi4 gemma4"   — architectures to annotate with
+#   MODELS="qwen3_5_2b phi4 gemma4_e2b"   — architectures to annotate with
 #   LIMIT=10                       — cap images (for smoke testing)
 #   N_RUNS=5                       — independent passes per image for variance
 
 set -euo pipefail
 
-# MODELS="${MODELS:-qwen_vl gemma4 phi4}"
-MODELS="${MODELS:-qwen_vl}"
+# MODELS="${MODELS:-qwen3_5_2b gemma4_e2b phi4 gemma4_e4b gemma4_31b qwen3_vl_8b qwen3_vl_30b}"
+MODELS="${MODELS:-gemma4_e2b phi4 gemma4_e4b gemma4_31b qwen3_vl_8b qwen3_vl_30b}"
 LIMIT="${LIMIT:-}"
 N_RUNS="${N_RUNS:-3}"
 
