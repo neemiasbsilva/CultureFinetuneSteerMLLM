@@ -3,7 +3,14 @@
 #
 # For each architecture, trains one cultural model per culture using
 # WVS Q&A with a culture-specific system prompt.
-# Training resumes automatically from the latest checkpoint if one exists.
+#
+# Resume behaviour:
+#   - If training was completed for a model/culture (TRAINING_DONE sentinel
+#     exists), that combination is skipped automatically.
+#   - If training was interrupted (Ctrl+C → MLflow run marked FAILED), the
+#     script resumes from the last HF checkpoint and opens a fresh MLflow run.
+#   - If the process was killed (SIGKILL → MLflow run left as RUNNING), the
+#     same MLflow run is reopened and training continues from the checkpoint.
 #
 # Backend selection:
 #   - "mlx"  → train_mlx.py  (Apple Silicon only)
@@ -11,13 +18,17 @@
 # MLX configs automatically fall back to train_hf.py on CUDA machines.
 #
 # ENV overrides:
-#   MODELS="qwen_vl gemma4 phi4 gemma4_e4b gemma4_31b qwen3_vl_8b qwen3_vl_30b"
-#   CULTURES="arabic chinese english"  — subset of cultures
+#   MODELS="gemma4_e2b phi4 ..."      — which architectures to train
+#   CULTURES="arabic chinese english" — subset of cultures
 
 set -euo pipefail
 
-MODELS="${MODELS:-gemma4 phi4 gemma4_e4b gemma4_31b qwen3_vl_8b qwen3_vl_30b}"
+MODELS="${MODELS:-gemma4_e2b gemma4_e4b gemma4_31b phi4 qwen3_5_2b qwen3_vl_8b qwen3_vl_30b}"
 CULTURES="${CULTURES:-arabic bengali chinese english german korean portuguese spanish turkish}"
+
+# On Ctrl+C: let the Python subprocess handle MLflow cleanup (marks run FAILED),
+# then exit with the standard interrupt code so the user can re-run the script.
+trap 'echo ""; echo "Interrupted. Re-run this script to resume from the last checkpoint."; exit 130' INT
 
 echo "=== culture-mllm: WVS Fine-Tuning ==="
 echo "Models     : $MODELS"
@@ -49,6 +60,11 @@ for MODEL in $MODELS; do
   fi
 
   for CULTURE in $CULTURES; do
+    DONE_FILE="checkpoints/${CULTURE}/${MODEL}/cultural/TRAINING_DONE"
+    if [ -f "$DONE_FILE" ]; then
+      echo "  Skipping $MODEL / $CULTURE — already complete"
+      continue
+    fi
     echo "  Training: $MODEL / $CULTURE / cultural"
     $TRAIN_CMD --config "$CONFIG" --culture "$CULTURE"
   done
