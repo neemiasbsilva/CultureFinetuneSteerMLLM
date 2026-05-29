@@ -37,21 +37,35 @@ CULTURES = [
 EPOCH_STEPS = [1890, 3780]
 TOTAL_STEPS = 5670
 
-# Palette
-C_CULTURAL = "#E05252"   # warm red  — cultural condition
-C_BASELINE = "#5B8FD4"   # steel blue — baseline condition
+C_CULTURAL = "#E05252"
+C_BASELINE = "#5B8FD4"
 
 
 # ---------------------------------------------------------------------------
 # Data layer
 # ---------------------------------------------------------------------------
 
-def _fetch(client: mlflow.MlflowClient, run_id: str, key: str):
+def _fetch(client: mlflow.MlflowClient, run_id: str, key: str) -> list:
+    """Fetch a metric history from MLflow, sorted by step.
+
+    Args:
+        client (mlflow.MlflowClient): Active MLflow client.
+        run_id (str): MLflow run ID.
+        key (str): Metric key (e.g., "train_loss").
+
+    Returns:
+        list: Metric objects sorted by step.
+    """
     return sorted(client.get_metric_history(run_id, key), key=lambda m: m.step)
 
 
 def load_all_runs() -> dict:
-    """Return {(culture, condition): {"ts": [...], "tv": [...], "vs": [...], "vv": [...]}}"""
+    """Load all Qwen3.5-2B fine-tuning run metrics from MLflow.
+
+    Returns:
+        dict: Mapping of (culture, condition) to a dict with keys
+            "ts", "tv" (train steps/values) and "vs", "vv" (val steps/values).
+    """
     client = mlflow.MlflowClient(MLFLOW_URI)
     exps   = client.search_experiments()
     exp_id = next(e.experiment_id for e in exps if "culturevlm" in e.name)
@@ -94,6 +108,12 @@ def _draw_panel(
 
 
 def _finalise_panel(ax: plt.Axes, show_epoch_labels: bool = False) -> None:
+    """Apply shared axis limits, epoch markers, and grid to a panel.
+
+    Args:
+        ax (plt.Axes): The axes to finalise.
+        show_epoch_labels (bool, optional): Whether to annotate epoch boundaries. Defaults to False.
+    """
     ymax = min(4.0, ax.get_ylim()[1])
     ax.set_ylim(0, ymax)
     ax.set_xlim(0, TOTAL_STEPS + 60)
@@ -117,6 +137,12 @@ def _finalise_panel(ax: plt.Axes, show_epoch_labels: bool = False) -> None:
 # ---------------------------------------------------------------------------
 
 def make_combined(data: dict, out_path: Path) -> None:
+    """Render a 3×3 grid comparing cultural vs. baseline conditions per culture.
+
+    Args:
+        data (dict): Run data as returned by load_all_runs().
+        out_path (Path): Destination PDF path.
+    """
     fig, axes = plt.subplots(3, 3, figsize=(7.2, 5.6), sharey=False, sharex=True)
     fig.subplots_adjust(hspace=0.42, wspace=0.28,
                         left=0.07, right=0.98, top=0.91, bottom=0.09)
@@ -139,7 +165,6 @@ def make_combined(data: dict, out_path: Path) -> None:
                 fontsize=7, fontweight="bold", color="#333333",
                 va="top", ha="left")
 
-        # final-value annotations
         for d, color, yoff in [(cul, C_CULTURAL, +5), (bas, C_BASELINE, -9)]:
             if d:
                 tl_f = d["tv"][-1]
@@ -150,12 +175,10 @@ def make_combined(data: dict, out_path: Path) -> None:
                             arrowprops=dict(arrowstyle="-", color=color,
                                             lw=0.4, alpha=0.6))
 
-    # shared axis labels
     fig.text(0.5, 0.01, "Training Step", ha="center", fontsize=8)
     fig.text(0.01, 0.5, "Cross-Entropy Loss", va="center",
              rotation="vertical", fontsize=8)
 
-    # legend (top, shared)
     from matplotlib.lines import Line2D
     handles = [
         Line2D([0], [0], color=C_CULTURAL, lw=1.2, label="Cultural — train"),
@@ -178,15 +201,20 @@ def make_combined(data: dict, out_path: Path) -> None:
 # ---------------------------------------------------------------------------
 
 def make_individual(data: dict, fig_dir: Path) -> None:
+    """Save one PDF per (culture, condition) run.
+
+    Args:
+        data (dict): Run data as returned by load_all_runs().
+        fig_dir (Path): Directory where individual PDFs are written.
+    """
     fig_dir.mkdir(parents=True, exist_ok=True)
     for (culture, condition), d in data.items():
         fig, ax = plt.subplots(figsize=(4.0, 2.4))
         color     = C_CULTURAL if condition == "cultural" else C_BASELINE
-        model     = d.get("model", "qwen_vl")
+        model     = d.get("model", "qwen3_5_2b")
         _draw_panel(ax, d["ts"], d["tv"], d["vs"], d["vv"], color, condition)
         _finalise_panel(ax, show_epoch_labels=True)
 
-        # final-value labels
         bbox = dict(boxstyle="round,pad=0.15", facecolor="white",
                     edgecolor="#cccccc", linewidth=0.5)
         ax.annotate(f"TL={d['tv'][-1]:.3f}",
@@ -227,7 +255,7 @@ def main() -> None:
     data = load_all_runs()
     print(f"  {len(data)} runs loaded")
 
-    make_combined(data, FIG_DIR / "loss_curves_qwen_vl_all.pdf")
+    make_combined(data, FIG_DIR / "loss_curves_qwen3_5_2b_all.pdf")
 
     if not args.no_individual:
         print("Generating individual panels…")
