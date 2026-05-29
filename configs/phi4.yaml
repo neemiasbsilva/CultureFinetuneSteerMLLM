@@ -46,5 +46,5 @@ cultures:
 n_folds: 5
 
 mlflow:
-  experiment: "emnlp26_culturevlm_training"
+  experiment: "culture_mllm_training"
   tracking_uri: "http://127.0.0.1:5000"

@@ -1,9 +1,9 @@
 model:
-  id: "google/gemma-4-E2B-it"
-  mlx_id: "mlx-community/gemma-4-e2b-it-4bit"
-  backend: "hf_mps"
+  id: "Qwen/Qwen3.5-2B"
+  mlx_id: "mlx-community/Qwen3.5-2B-4bit"
+  backend: "mlx"           # "mlx" | "hf_mps"
   dtype: "bfloat16"
-  image_max_pixels: 200704  # 448×448
+  image_max_pixels: 200704  # 448×448 — reduces VRAM during training
 
 lora:
   r: 8
@@ -18,7 +18,7 @@ lora:
 
 training:
   batch_size: 1
-  gradient_accumulation: 8
+  gradient_accumulation: 8     # effective batch = 8
   max_epochs: 250
   learning_rate: 2.0e-4
   lr_schedule: "cosine"
@@ -45,5 +45,5 @@ cultures:
 n_folds: 5
 
 mlflow:
-  experiment: "emnlp26_culturevlm_training"
+  experiment: "culture_mllm_training"
   tracking_uri: "http://127.0.0.1:5000"
