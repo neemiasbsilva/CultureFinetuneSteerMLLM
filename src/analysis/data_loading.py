@@ -18,7 +18,7 @@ CULTURES = [
     "arabic", "bengali", "chinese", "english", "german",
     "korean", "portuguese", "spanish", "turkish", "baseline",
 ]
-MODEL_NAMES = ["qwen_vl", "phi4", "gemma4"]
+MODEL_NAMES = ["qwen3_5_2b", "phi4", "gemma4_e2b"]
 
 SENTIMENT_INT_TO_LABEL = {
     0: "negative", 1: "slightly_negative", 2: "neutral",
@@ -31,17 +31,17 @@ def load_annotations(
     cultures: list[str] | None = None,
     annotations_dir: Path | str = OUTPUT_DIR,
 ) -> pd.DataFrame:
-    """
-    Load all JSONL annotation files into a single DataFrame.
+    """Load all JSONL annotation files into a single DataFrame.
 
-    Returns columns:
-        annotation_id, image_id, culture, model_name, condition,
-        annotation_run_id, run_id, run_index, n_runs,
-        ground_truth_sentiment, predicted_sentiment, predicted_sentiment_label,
-        predicted_perceptions (list), caption, justification,
-        parse_retries, error, timestamp_utc,
-        ground_truth_label, profile (culture__model_name),
-        profile_run (culture__model_name__run_id)
+    Args:
+        model_names (list[str] | None, optional): Models to include. Defaults to MODEL_NAMES.
+        cultures (list[str] | None, optional): Cultures to include. Defaults to CULTURES.
+        annotations_dir (Path | str, optional): Root annotations directory. Defaults to OUTPUT_DIR.
+
+    Returns:
+        pd.DataFrame: One row per annotation, with columns for culture, model,
+            sentiment scores, derived profile keys, and text length features.
+            Returns an empty DataFrame if no files are found.
     """
     annotations_dir = Path(annotations_dir)
     model_names = model_names or MODEL_NAMES
@@ -65,7 +65,6 @@ def load_annotations(
 
     df = pd.DataFrame(records)
 
-    # Normalise types
     df["predicted_sentiment"] = pd.to_numeric(df["predicted_sentiment"], errors="coerce").fillna(-1).astype(int)
     df["ground_truth_sentiment"] = pd.to_numeric(df["ground_truth_sentiment"], errors="coerce").fillna(-1).astype(int)
     if "run_index" not in df.columns:
@@ -91,13 +90,11 @@ def load_annotations(
             df["model_name"] + "_" + df["culture"] + "_" + df["run_id"]
         )
 
-    # Derived columns
     df["ground_truth_label"] = df["ground_truth_sentiment"].map(SENTIMENT_INT_TO_LABEL).fillna("unknown")
     df["predicted_sentiment_label"] = df["predicted_sentiment"].map(SENTIMENT_INT_TO_LABEL).fillna("unknown")
     df["profile"] = df["culture"] + "__" + df["model_name"]
     df["profile_run"] = df["profile"] + "__" + df["run_id"]
 
-    # Word counts
     df["caption_len"] = df["caption"].fillna("").apply(lambda x: len(x.split()))
     df["justification_len"] = df["justification"].fillna("").apply(lambda x: len(x.split()))
     df["n_perceptions"] = df["predicted_perceptions"].apply(
@@ -112,7 +109,16 @@ def load_failures(
     cultures: list[str] | None = None,
     annotations_dir: Path | str = OUTPUT_DIR,
 ) -> pd.DataFrame:
-    """Load annotation failure records for quality analysis."""
+    """Load annotation failure records for quality analysis.
+
+    Args:
+        model_names (list[str] | None, optional): Models to include. Defaults to MODEL_NAMES.
+        cultures (list[str] | None, optional): Cultures to include. Defaults to CULTURES.
+        annotations_dir (Path | str, optional): Root annotations directory. Defaults to OUTPUT_DIR.
+
+    Returns:
+        pd.DataFrame: Failure records, or an empty DataFrame if none exist.
+    """
     annotations_dir = Path(annotations_dir)
     model_names = model_names or MODEL_NAMES
     cultures = cultures or CULTURES
@@ -133,5 +139,14 @@ def load_failures(
 
 
 def parse_failure_rate(df: pd.DataFrame, failures: pd.DataFrame) -> float:
+    """Compute the fraction of annotation attempts that failed to parse.
+
+    Args:
+        df (pd.DataFrame): Successfully parsed annotations.
+        failures (pd.DataFrame): Failed annotation records.
+
+    Returns:
+        float: failures / (successes + failures), or 0.0 if both are empty.
+    """
     total = len(df) + len(failures)
     return len(failures) / total if total > 0 else 0.0
