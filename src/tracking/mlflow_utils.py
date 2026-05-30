@@ -7,15 +7,31 @@ import mlflow
 
 
 def setup_mlflow(tracking_uri: str | None = None, experiment: str | None = None) -> None:
+    """Configure MLflow tracking URI and experiment, falling back to env vars.
+
+    Args:
+        tracking_uri (str | None, optional): MLflow server URI. Defaults to MLFLOW_TRACKING_URI env var.
+        experiment (str | None, optional): Experiment name. Defaults to MLFLOW_EXPERIMENT_TRAINING env var.
+    """
     uri = tracking_uri or os.getenv("MLFLOW_TRACKING_URI", "http://127.0.0.1:5000")
-    exp = experiment or os.getenv("MLFLOW_EXPERIMENT_TRAINING", "emnlp26_culturevlm_training")
+    exp = experiment or os.getenv("MLFLOW_EXPERIMENT_TRAINING", "culture_mllm_training")
     mlflow.set_tracking_uri(uri)
     mlflow.set_experiment(exp)
 
 
 @contextmanager
 def training_run(model_name: str, culture: str, condition: str, fold: int | str):
-    """Context manager for a single (model, culture, condition, fold) training run."""
+    """Context manager for a single (model, culture, condition, fold) training run.
+
+    Args:
+        model_name (str): Model identifier.
+        culture (str): Culture name.
+        condition (str): Training condition ("cultural" or "baseline").
+        fold (int | str): Fold index or label.
+
+    Yields:
+        mlflow.ActiveRun: The active MLflow run.
+    """
     run_name = f"{model_name}_{culture}_{condition}_fold{fold}"
     with mlflow.start_run(run_name=run_name) as run:
         mlflow.set_tags({
