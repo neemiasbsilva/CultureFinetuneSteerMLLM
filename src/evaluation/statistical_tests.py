@@ -36,14 +36,20 @@ CULTURES = [
     "arabic", "bengali", "chinese", "english", "german",
     "korean", "portuguese", "spanish", "turkish",
 ]
-MODELS = ["qwen_vl", "phi4", "gemma4"]
+MODELS = ["qwen3_5_2b", "phi4", "gemma4_e2b"]
 N_FOLDS = 5
 ALPHA = 0.05
 
 
 def load_fold_metrics(path: str, metric: str) -> dict:
-    """
-    Returns dict: {(model_name, culture, condition): [fold_1_metric, ..., fold_5_metric]}
+    """Load per-fold metric values grouped by (model_name, culture, condition).
+
+    Args:
+        path (str): Path to fold_metrics.csv.
+        metric (str): Column name to extract (e.g., "f1_macro").
+
+    Returns:
+        dict: {(model_name, culture, condition): [fold_1_value, ..., fold_N_value]}
     """
     df = pd.read_csv(path)
     groups: dict[tuple, list] = {}
