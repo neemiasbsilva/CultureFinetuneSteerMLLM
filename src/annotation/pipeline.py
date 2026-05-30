@@ -67,7 +67,7 @@ CULTURES = [
 INFERENCE_ONLY_CULTURE = "inference_only"
 CONDITIONS = ["cultural", "baseline", "inference_only"]
 MODEL_NAMES = [
-    "qwen_vl", "phi4", "gemma4",          # original Mac/MLX models
+    "qwen3_5_2b", "phi4", "gemma4_e2b",    # original Mac/MLX models
     "gemma4_e4b", "gemma4_31b",            # Gemma-4 (HF backend)
     "qwen3_vl_8b", "qwen3_vl_30b",         # Qwen3-VL (HF backend)
 ]
@@ -123,6 +123,17 @@ def build_annotation_record(
     culture: str,
     condition: str,
 ) -> dict:
+    """Flatten a completed LangGraph state into a serialisable annotation record.
+
+    Args:
+        state (dict): Final graph state after all nodes have run.
+        model_name (str): Model identifier (e.g., "qwen3_5_2b").
+        culture (str): Culture name (e.g., "arabic").
+        condition (str): Annotation condition ("cultural", "baseline", "inference_only").
+
+    Returns:
+        dict: Flat record suitable for JSONL serialisation.
+    """
     parsed = state.get("parsed") or {}
     sentiment_int = parsed.get("sentiment", -1)
     run_index = int(state["run_index"])
@@ -168,7 +179,6 @@ async def run_pipeline(
 ) -> dict:
     graph = build_annotation_graph(settings)
 
-    # Pre-load all images into memory
     image_ids = df["image_id"].tolist()
     cache = ImageCache(image_ids, settings.images_dir)
     console.print(
@@ -273,6 +283,7 @@ def run_single(
     out_path = out_dir / "annotations.jsonl"
     failures_path = out_dir / "annotation_failures.jsonl"
 
+    # Caps concurrent graph.ainvoke calls to avoid OOM and API rate limits.
     semaphore = asyncio.Semaphore(settings.max_concurrent)
 
     result = asyncio.run(
