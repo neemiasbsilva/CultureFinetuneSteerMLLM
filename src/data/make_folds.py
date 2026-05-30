@@ -79,7 +79,7 @@ def check_class_balance(folds: list[tuple], labels: pd.Series, n_folds: int) -> 
 
     console.print(table)
 
-    # Warn if any fold deviates more than 5% in class proportion
+    # 5% tolerance: tighter than that would reject valid splits on small classes.
     global_dist = labels.value_counts(normalize=True).sort_index()
     for fold_idx, (_, val_idx) in enumerate(folds):
         fold_dist = labels.iloc[val_idx].value_counts(normalize=True).sort_index()
@@ -125,7 +125,7 @@ def log_to_mlflow(df: pd.DataFrame, n_folds: int) -> None:
     try:
         mlflow.set_tracking_uri(tracking_uri)
         mlflow.set_experiment(
-            os.getenv("MLFLOW_EXPERIMENT_TRAINING", "emnlp26_culturevlm_training")
+            os.getenv("MLFLOW_EXPERIMENT_TRAINING", "culture_mllm_training")
         )
         with mlflow.start_run(run_name="data_fold_creation"):
             mlflow.log_param("n_images", len(df))
@@ -149,12 +149,10 @@ def main() -> None:
 
     df = load_and_validate(args.agreement_csv, args.images_dir)
 
-    # Save full dataset for final annotation model training
     ALL_TRAIN_CSV.parent.mkdir(parents=True, exist_ok=True)
     df.to_csv(ALL_TRAIN_CSV, index=False)
     console.print(f"[green]Saved all_train.csv: {len(df)} rows → {ALL_TRAIN_CSV}[/green]")
 
-    # Sentiment label distribution summary
     console.print("\nGlobal sentiment distribution:")
     for c, count in df["sentiment"].value_counts().sort_index().items():
         console.print(f"  {c} ({SENTIMENT_LABELS[c]}): {count} ({count/len(df)*100:.1f}%)")
