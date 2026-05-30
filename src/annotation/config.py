@@ -55,8 +55,8 @@ class AnnotatorSettings:
 
     # MLX-community model IDs for mlx_vlm inference (Apple Silicon only)
     model_id_map: dict = field(default_factory=lambda: {
-        "qwen_vl": "mlx-community/Qwen3.5-2B-4bit",
-        "gemma4":  "mlx-community/gemma-4-e2b-it-4bit",
+        "qwen3_5_2b": "mlx-community/Qwen3.5-2B-4bit",
+        "gemma4_e2b": "mlx-community/gemma-4-e2b-it-4bit",
     })
     # HF model IDs for models that use the HF backend (CUDA or MPS)
     hf_model_id_map: dict = field(default_factory=lambda: {
