@@ -21,7 +21,7 @@ training:
   gradient_accumulation: 8
   max_epochs: 250
   learning_rate: 2.0e-4
-  lr_schedule: "cosine_decay"
+  lr_schedule: "cosine"
   warmup_steps: 50
   early_stopping_patience: 15
   early_stopping_min_epochs: 20
