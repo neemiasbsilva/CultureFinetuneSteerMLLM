@@ -1,7 +1,7 @@
 model:
-  id: "Qwen/Qwen3-VL-30B-A3B-Instruct-FP8"
+  id: "Qwen/Qwen3.6-27B"
   backend: "hf"                  # auto-detects cuda > mps > cpu at runtime
-  dtype: "auto"                  # FP8 MoE — ~3B active params, ~20GB in FP8
+  dtype: "bfloat16"              # BF16 base model — 4-bit QLoRA brings ~54 GB down to ~14 GB on RTX 5090
   image_max_pixels: 200704       # 448×448
 
 lora:
@@ -16,6 +16,7 @@ lora:
     - "o_proj"
 
 training:
+  quantization: "4bit"           # QLoRA via bitsandbytes — required for 27B BF16 on 32GB VRAM
   batch_size: 1
   gradient_accumulation: 16      # effective batch = 16
   max_epochs: 250
