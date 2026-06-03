@@ -195,6 +195,83 @@ def compute_metrics_fn(eval_preds) -> dict:
     return {"eval_f1_macro": f1}
 
 
+def _patch_supports_quant_method() -> None:
+    """Guard AutoHfQuantizer.supports_quant_method against None input.
+
+    Transformers bug (>=5.x): hasattr(config, "quantization_config") returns
+    True even when the value is None (class-level attribute), so
+    supports_quant_method() receives None and crashes on None.get().
+    """
+    from transformers.quantizers.auto import AutoHfQuantizer as _AHQ
+    _orig = _AHQ.supports_quant_method
+    if getattr(_orig, "_none_guarded", False):
+        return
+
+    def _safe(qcfg):
+        return False if qcfg is None else _orig(qcfg)
+
+    _safe._none_guarded = True
+    _AHQ.supports_quant_method = staticmethod(_safe)
+
+
+def _check_vram_headroom(model_cfg: dict, quant_cfg, device: str) -> None:
+    """Fail fast with a clear message if the model cannot fit in GPU VRAM.
+
+    Args:
+        model_cfg: model section of the YAML config.
+        quant_cfg: BitsAndBytesConfig if 4-bit is requested, else None.
+        device: resolved device string ("cuda", "mps", "cpu").
+    """
+    if device != "cuda":
+        return
+
+    from huggingface_hub import scan_cache_dir
+    import torch
+
+    model_id = model_cfg["id"]
+
+    # Estimate checkpoint size from local HF cache
+    try:
+        cache = scan_cache_dir()
+        repo = next((r for r in cache.repos if r.repo_id == model_id), None)
+        checkpoint_bytes = repo.size_on_disk if repo else 0
+    except Exception:
+        checkpoint_bytes = 0
+
+    if checkpoint_bytes == 0:
+        return  # Not cached yet; let the download + load proceed naturally
+
+    checkpoint_gb = checkpoint_bytes / 1024 ** 3
+    free_bytes, total_bytes = torch.cuda.mem_get_info(0)
+    free_gb = free_bytes / 1024 ** 3
+    total_gb = total_bytes / 1024 ** 3
+
+    # Training headroom: LoRA params + activations + optimizer state
+    headroom_gb = 3.0
+    # 4-bit NF4 compresses 16-bit weights to 4-bit (ratio 0.25); FP8/native loads as-is.
+    effective_gb = checkpoint_gb if quant_cfg is None else checkpoint_gb * 0.25
+
+    if effective_gb + headroom_gb > total_gb:
+        quant_note = (
+            "BitsAndBytes 4-bit cannot be applied because the model is pre-quantized "
+            f"with a different scheme (check model config). "
+            if quant_cfg is not None
+            else "Add 'quantization: \"4bit\"' to your YAML training section to halve "
+            "the memory requirement — but only if the model is NOT already pre-quantized "
+            "with a different method (e.g. FP8), as mixing quantizers is not supported. "
+        )
+        raise RuntimeError(
+            f"\nModel '{model_id}' cannot fit on this GPU.\n"
+            f"  Checkpoint : {checkpoint_gb:.1f} GB\n"
+            f"  Effective  : {effective_gb:.1f} GB (after quantization if any)\n"
+            f"  GPU total  : {total_gb:.1f} GB\n"
+            f"  Free now   : {free_gb:.1f} GB\n"
+            f"  Headroom   : {headroom_gb:.1f} GB (LoRA + activations)\n"
+            f"\n{quant_note}"
+            "No further adjustments are possible for this model on this hardware."
+        )
+
+
 def _build_quantization_config(train_cfg: dict, device: str):
     """Return BitsAndBytesConfig for QLoRA when requested, else None."""
     if train_cfg.get("quantization") != "4bit" or device != "cuda":
@@ -257,18 +334,32 @@ def train(cfg: dict, model_name: str, culture: str, debug: bool) -> None:
     dtype_str = model_cfg.get("dtype", "bfloat16")
     torch_dtype = torch.bfloat16 if dtype_str != "auto" else "auto"
 
+    _check_vram_headroom(model_cfg, quant_cfg, device)
+    _patch_supports_quant_method()
+    # {"": device} puts the entire model on one GPU without pre-computing a device
+    # map from BF16 parameter counts — balanced_low_0 estimates 60 GB for a 30 GB
+    # FP8 model and spills layers to meta, which breaks LoRA backprop.
     model = AutoModelForImageTextToText.from_pretrained(
         model_cfg["id"],
         quantization_config=quant_cfg,
         torch_dtype=torch_dtype,
-        device_map="auto" if device == "cuda" else None,
+        device_map={"": device} if device == "cuda" else None,
         low_cpu_mem_usage=True,
         trust_remote_code=True,
         attn_implementation=attn_impl,
     )
-    # Explicit placement only when not using device_map="auto"
+    # Explicit placement only when not using device_map
     if device != "cuda":
         model = model.to(device)
+
+    meta_params = [n for n, p in model.named_parameters() if p.device.type == "meta"]
+    if meta_params:
+        raise RuntimeError(
+            f"{len(meta_params)} model parameter(s) landed on the meta device "
+            "(CPU-offloaded). LoRA training requires all base parameters on GPU. "
+            "Add 'quantization: 4bit' to your config to reduce memory, or use a "
+            "GPU with enough VRAM to hold the full model."
+        )
 
     model.enable_input_require_grads()
     if train_cfg.get("gradient_checkpointing", False):
