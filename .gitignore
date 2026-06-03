@@ -24,15 +24,21 @@ env/
 *.ipynb_checkpoints
 
 # ML artifacts
-checkpoints/
-outputs/
+checkpoints/**
+!checkpoints/.gitkeep
+outputs/**
+!outputs/.gitkeep
 mlflow.db
-mlruns/
+mlruns/**
+!mlruns/.gitkeep
 
 # Data
-data/raw/
-data/processed/
-data/folds/
+data/raw/**
+!data/raw/.gitkeep
+data/processed/**
+!data/processed/.gitkeep
+data/folds/**
+!data/folds/.gitkeep
 *.csv
 *.parquet
 *.h5
@@ -49,7 +55,8 @@ data/folds/
 *.ggml
 
 # Logs
-logs/
+logs/**
+!logs/.gitkeep
 *.log
 wandb/
 

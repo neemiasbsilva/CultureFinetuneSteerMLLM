@@ -64,7 +64,7 @@ class AnnotatorSettings:
         "gemma4_e4b":   "google/gemma-4-E4B-it",
         "gemma4_31b":   "google/gemma-4-31B-it",
         "qwen3_vl_8b":  "Qwen/Qwen3-VL-8B-Thinking-FP8",
-        "qwen3_vl_30b": "Qwen/Qwen3-VL-30B-A3B-Instruct-FP8",
+        "qwen3_27b":    "Qwen/Qwen3.6-27B",
     })
 
     seed: int = 42
