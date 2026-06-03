@@ -12,8 +12,8 @@
 
 set -euo pipefail
 
-# MODELS="${MODELS:-qwen3_5_2b gemma4_e2b phi4 gemma4_e4b gemma4_31b qwen3_vl_8b qwen3_vl_30b}"
-MODELS="${MODELS:-qwen3_5_2b gemma4_e2b phi4 gemma4_e4b gemma4_31b qwen3_vl_8b qwen3_vl_30b}"
+# MODELS="${MODELS:-qwen3_5_2b gemma4_e2b phi4 gemma4_e4b gemma4_31b qwen3_vl_8b qwen3_27b}"
+MODELS="${MODELS:-qwen3_5_2b gemma4_e2b phi4 gemma4_e4b gemma4_31b qwen3_vl_8b qwen3_27b}"
 CULTURES="${CULTURES:-arabic bengali chinese english german korean portuguese spanish turkish}"
 LIMIT="${LIMIT:-}"
 N_RUNS="${N_RUNS:-3}"

@@ -69,7 +69,7 @@ CONDITIONS = ["cultural", "baseline", "inference_only"]
 MODEL_NAMES = [
     "qwen3_5_2b", "phi4", "gemma4_e2b",    # original Mac/MLX models
     "gemma4_e4b", "gemma4_31b",            # Gemma-4 (HF backend)
-    "qwen3_vl_8b", "qwen3_vl_30b",         # Qwen3-VL (HF backend)
+    "qwen3_vl_8b", "qwen3_27b",             # Qwen3-VL / Qwen3 (HF backend)
 ]
 
 
