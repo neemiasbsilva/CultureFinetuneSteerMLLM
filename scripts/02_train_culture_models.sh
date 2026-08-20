@@ -23,7 +23,7 @@
 
 set -euo pipefail
 
-MODELS="${MODELS:-gemma4_e2b gemma4_31b gemma4_e4b qwen3_5_2b qwen3_27b qwen3_vl_8b phi4}"
+MODELS="${MODELS:-gemma4_e2b gemma4_31b gemma4_e4b qwen3_5_2b qwen3_27b qwen3_vl_8b}"
 CULTURES="${CULTURES:-arabic bengali chinese english german korean portuguese spanish turkish}"
 
 # On Ctrl+C: let the Python subprocess handle MLflow cleanup (marks run FAILED),
