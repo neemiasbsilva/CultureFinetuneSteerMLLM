@@ -14,8 +14,10 @@ from __future__ import annotations
 
 import argparse
 from pathlib import Path
+from typing import Any, cast
 
 import matplotlib
+
 matplotlib.use("Agg")
 import matplotlib.pyplot as plt
 import matplotlib.ticker as mticker
@@ -25,13 +27,13 @@ REPO_ROOT = Path(__file__).resolve().parents[1]
 MLFLOW_URI = f"sqlite:///{REPO_ROOT}/mlflow.db"
 
 TRAIN_COLOR = "#FD4F4F"
-VAL_COLOR   = "#5BAD75"
+VAL_COLOR = "#5BAD75"
 
 EPOCH_STEPS = [1890, 3780]
 TOTAL_STEPS = 5670
 
 
-def fetch_metrics(run_id: str) -> tuple[list, list, list, list]:
+def fetch_metrics(run_id: str) -> tuple[list[Any], list[Any], list[Any], list[Any]]:
     """Fetch train and validation loss histories from MLflow.
 
     Args:
@@ -42,10 +44,12 @@ def fetch_metrics(run_id: str) -> tuple[list, list, list, list]:
     """
     client = mlflow.MlflowClient(MLFLOW_URI)
     tl = sorted(client.get_metric_history(run_id, "train_loss"), key=lambda m: m.step)
-    vl = sorted(client.get_metric_history(run_id, "val_loss"),   key=lambda m: m.step)
+    vl = sorted(client.get_metric_history(run_id, "val_loss"), key=lambda m: m.step)
     return (
-        [m.step  for m in tl], [m.value for m in tl],
-        [m.step  for m in vl], [m.value for m in vl],
+        [m.step for m in tl],
+        [m.value for m in tl],
+        [m.step for m in vl],
+        [m.value for m in vl],
     )
 
 
@@ -64,9 +68,9 @@ def find_run_id(culture: str, condition: str, model: str) -> str:
         ValueError: If no matching run is found.
     """
     client = mlflow.MlflowClient(MLFLOW_URI)
-    exps   = client.search_experiments()
+    exps = client.search_experiments()
     exp_id = next(e.experiment_id for e in exps if "culturevlm" in e.name)
-    runs   = client.search_runs(
+    runs = client.search_runs(
         exp_id,
         filter_string=(
             f"tags.culture = '{culture}' AND "
@@ -76,17 +80,22 @@ def find_run_id(culture: str, condition: str, model: str) -> str:
     )
     if not runs:
         raise ValueError(f"No run found for {culture}/{condition}/{model}")
-    return runs[0].info.run_id
+    return cast(str, runs[0].info.run_id)
 
 
 def plot(
-    train_steps: list, train_vals: list,
-    val_steps:   list, val_vals:   list,
+    train_steps: list[Any],
+    train_vals: list[Any],
+    val_steps: list[Any],
+    val_vals: list[Any],
     out_path: Path,
     culture: str = "Arabic",
     condition: str = "cultural",
 ) -> None:
     """Render and save a publication-ready loss-curve PDF.
+
+    Axis limits are set before the annotations are drawn so that the final limits are
+    already in effect when annotation and epoch-label positions are computed.
 
     Args:
         train_steps (list): Step indices for training loss.
@@ -99,47 +108,68 @@ def plot(
     """
     fig, ax = plt.subplots(figsize=(7.2, 3.0))
 
-    ax.plot(train_steps, train_vals,
-            color=TRAIN_COLOR, linewidth=1.3, label="Train loss (every 25 steps)")
-    ax.plot(val_steps, val_vals,
-            color=VAL_COLOR,   linewidth=1.3, linestyle="--",
-            marker="o", markersize=2.0, markevery=5,
-            label="Val loss (every 100 steps)")
+    ax.plot(
+        train_steps,
+        train_vals,
+        color=TRAIN_COLOR,
+        linewidth=1.3,
+        label="Train loss (every 25 steps)",
+    )
+    ax.plot(
+        val_steps,
+        val_vals,
+        color=VAL_COLOR,
+        linewidth=1.3,
+        linestyle="--",
+        marker="o",
+        markersize=2.0,
+        markevery=5,
+        label="Val loss (every 100 steps)",
+    )
 
-    # Set axes before annotations so final limits are in effect.
     ax.set_xlim(0, TOTAL_STEPS + 50)
     ymax = min(4.0, max(max(train_vals), max(val_vals)) * 1.15)
     ax.set_ylim(0, ymax)
 
     for step in EPOCH_STEPS:
         ax.axvline(step, color="black", linewidth=0.7, linestyle="--", alpha=0.45)
-    ax.text(EPOCH_STEPS[0] + 30, ymax * 0.97,
-            "Epoch 2", fontsize=6.5, color="#555555", va="top")
-    ax.text(EPOCH_STEPS[1] + 30, ymax * 0.97,
-            "Epoch 3", fontsize=6.5, color="#555555", va="top")
+    ax.text(EPOCH_STEPS[0] + 30, ymax * 0.97, "Epoch 2", fontsize=6.5, color="#555555", va="top")
+    ax.text(EPOCH_STEPS[1] + 30, ymax * 0.97, "Epoch 3", fontsize=6.5, color="#555555", va="top")
 
     final_tl = train_vals[-1]
     final_vl = val_vals[-1]
-    bbox = dict(boxstyle="round,pad=0.2", facecolor="white",
-                edgecolor="#cccccc", linewidth=0.6)
-    ax.annotate(f"TL={final_tl:.3f}",
-                xy=(train_steps[-1], final_tl),
-                xytext=(-48, 6), textcoords="offset points",
-                fontsize=6.5, color="#444444",
-                arrowprops=dict(arrowstyle="-", color="#aaaaaa", lw=0.6),
-                bbox=bbox)
-    ax.annotate(f"VL={final_vl:.3f}",
-                xy=(val_steps[-1], final_vl),
-                xytext=(6, -14), textcoords="offset points",
-                fontsize=6.5, color="#444444",
-                arrowprops=dict(arrowstyle="-", color="#aaaaaa", lw=0.6),
-                bbox=bbox)
+    bbox = dict(boxstyle="round,pad=0.2", facecolor="white", edgecolor="#cccccc", linewidth=0.6)
+    ax.annotate(
+        f"TL={final_tl:.3f}",
+        xy=(train_steps[-1], final_tl),
+        xytext=(-48, 6),
+        textcoords="offset points",
+        fontsize=6.5,
+        color="#444444",
+        arrowprops=dict(arrowstyle="-", color="#aaaaaa", lw=0.6),
+        bbox=bbox,
+    )
+    ax.annotate(
+        f"VL={final_vl:.3f}",
+        xy=(val_steps[-1], final_vl),
+        xytext=(6, -14),
+        textcoords="offset points",
+        fontsize=6.5,
+        color="#444444",
+        arrowprops=dict(arrowstyle="-", color="#aaaaaa", lw=0.6),
+        bbox=bbox,
+    )
 
     spike_y = min(ymax * 0.94, 3.6)
-    ax.annotate("spike\nclipped", xy=(200, spike_y),
-                xytext=(370, spike_y - 0.3),
-                fontsize=5.5, color="#888888", ha="left",
-                arrowprops=dict(arrowstyle="-|>", color="#aaaaaa", lw=0.5))
+    ax.annotate(
+        "spike\nclipped",
+        xy=(200, spike_y),
+        xytext=(370, spike_y - 0.3),
+        fontsize=5.5,
+        color="#888888",
+        ha="left",
+        arrowprops=dict(arrowstyle="-|>", color="#aaaaaa", lw=0.5),
+    )
     ax.set_xlabel("Training Step", fontsize=8)
     ax.set_ylabel("Cross-Entropy Loss", fontsize=8)
     ax.tick_params(labelsize=7)
@@ -159,13 +189,17 @@ def plot(
 
 def main() -> None:
     parser = argparse.ArgumentParser(description="Generate loss-curve PDF from MLflow")
-    parser.add_argument("--run-id",    default=None,
-                        help="Full MLflow run ID (auto-detected if omitted)")
-    parser.add_argument("--culture",   default="arabic")
+    parser.add_argument(
+        "--run-id", default=None, help="Full MLflow run ID (auto-detected if omitted)"
+    )
+    parser.add_argument("--culture", default="arabic")
     parser.add_argument("--condition", default="cultural")
-    parser.add_argument("--model",     default="qwen3_5_2b")
-    parser.add_argument("--out",       default=None,
-                        help="Output PDF path (default: outputs/figures/loss_curve_<culture>_<condition>.pdf)")
+    parser.add_argument("--model", default="qwen3_5_2b")
+    parser.add_argument(
+        "--out",
+        default=None,
+        help="Output PDF path (default: outputs/figures/loss_curve_<culture>_<condition>.pdf)",
+    )
     args = parser.parse_args()
 
     run_id = args.run_id or find_run_id(args.culture, args.condition, args.model)
@@ -174,9 +208,10 @@ def main() -> None:
     ts, tv, vs, vv = fetch_metrics(run_id)
     print(f"  train points: {len(ts)}  val points: {len(vs)}")
 
-    out = Path(args.out) if args.out else (
-        REPO_ROOT / "outputs" / "figures" /
-        f"loss_curve_{args.culture}_{args.condition}.pdf"
+    out = (
+        Path(args.out)
+        if args.out
+        else (REPO_ROOT / "outputs" / "figures" / f"loss_curve_{args.culture}_{args.condition}.pdf")
     )
     plot(ts, tv, vs, vv, out, culture=args.culture, condition=args.condition)
 

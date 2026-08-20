@@ -22,7 +22,6 @@ from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Any
 
-
 REPO_ROOT = Path(__file__).resolve().parents[1]
 DEFAULT_INPUT = REPO_ROOT / "data" / "raw" / "final.json"
 GROUP_RE = re.compile(r"^(group\d+)(?:_form\d+)?$")
@@ -135,12 +134,10 @@ def print_summary(
     """Print a compact terminal report."""
     grouped_tasks = sum(summary.tasks for summary in groups.values())
     total_image_responses = sum(summary.image_responses for summary in groups.values())
-    total_unique_images = len(set().union(*(summary.image_ids for summary in groups.values()))) if groups else 0
-    worker_ids = {
-        str(task.get("worker_id") or "")
-        for task in tasks
-        if task.get("worker_id")
-    }
+    total_unique_images = (
+        len(set().union(*(summary.image_ids for summary in groups.values()))) if groups else 0
+    )
+    worker_ids = {str(task.get("worker_id") or "") for task in tasks if task.get("worker_id")}
     group_worker_ids = {worker_id for worker_id in worker_ids if GROUP_RE.match(worker_id)}
     non_group_worker_ids = worker_ids - group_worker_ids
 
