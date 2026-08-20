@@ -5,6 +5,8 @@ Computes per-fold classification quality (macro-F1, MAE, QWK) used as
 input to the Holm-Bonferroni statistical comparison across conditions.
 """
 
+from typing import Any
+
 import numpy as np
 import pandas as pd
 from sklearn.metrics import (
@@ -15,29 +17,34 @@ from sklearn.metrics import (
 )
 
 
-def compute_classification_metrics(
-    y_true: list[int], y_pred: list[int]
-) -> dict[str, float]:
+def compute_classification_metrics(y_true: list[int], y_pred: list[int]) -> dict[str, Any]:
     """Primary metrics used in Holm-Bonferroni comparisons."""
-    valid = [(t, p) for t, p in zip(y_true, y_pred) if t >= 0 and p >= 0]
+    valid = [(t, p) for t, p in zip(y_true, y_pred, strict=False) if t >= 0 and p >= 0]
     if not valid:
         return {
-            "f1_macro": 0.0, "f1_weighted": 0.0,
-            "f1_per_class": [], "mae": 5.0, "qwk": 0.0, "accuracy": 0.0,
+            "f1_macro": 0.0,
+            "f1_weighted": 0.0,
+            "f1_per_class": [],
+            "mae": 5.0,
+            "qwk": 0.0,
+            "accuracy": 0.0,
+            "n": 0,
         }
-    yt, yp = zip(*valid)
+    yt, yp = zip(*valid, strict=True)
     return {
-        "f1_macro":    round(float(f1_score(yt, yp, average="macro", zero_division=0)), 6),
+        "f1_macro": round(float(f1_score(yt, yp, average="macro", zero_division=0)), 6),
         "f1_weighted": round(float(f1_score(yt, yp, average="weighted", zero_division=0)), 6),
-        "f1_per_class": [round(float(v), 6) for v in f1_score(yt, yp, average=None, zero_division=0)],
-        "mae":         round(float(mean_absolute_error(yt, yp)), 6),
-        "qwk":         round(float(cohen_kappa_score(yt, yp, weights="quadratic")), 6),
-        "accuracy":    round(float(accuracy_score(yt, yp)), 6),
-        "n":           len(yt),
+        "f1_per_class": [
+            round(float(v), 6) for v in f1_score(yt, yp, average=None, zero_division=0)
+        ],
+        "mae": round(float(mean_absolute_error(yt, yp)), 6),
+        "qwk": round(float(cohen_kappa_score(yt, yp, weights="quadratic")), 6),
+        "accuracy": round(float(accuracy_score(yt, yp)), 6),
+        "n": len(yt),
     }
 
 
-def aggregate_fold_metrics(fold_records: list[dict]) -> dict[str, float]:
+def aggregate_fold_metrics(fold_records: list[dict[str, Any]]) -> dict[str, float]:
     """
     Aggregate per-fold metric records into mean ± std.
     Input: list of dicts from compute_classification_metrics (one per fold).
@@ -53,9 +60,7 @@ def aggregate_fold_metrics(fold_records: list[dict]) -> dict[str, float]:
     return result
 
 
-def build_fold_metrics_csv(
-    results: list[dict], output_path: str
-) -> pd.DataFrame:
+def build_fold_metrics_csv(results: list[dict[str, Any]], output_path: str) -> pd.DataFrame:
     """
     Build the fold_metrics.csv consumed by statistical_tests.py.
 
