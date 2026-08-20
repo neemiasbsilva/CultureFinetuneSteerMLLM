@@ -2,13 +2,15 @@
 name = "culture-mllm"
 version = "0.1.0"
 description = "culture-mllm: Cultural alignment in multimodal LLMs for urban sentiment perception (EMNLP 2026)"
+readme = "README.md"
 requires-python = ">=3.11,<3.12"
+authors = [{ name = "Neemias B. Silva", email = "neemiasbsilva@gmail.com" }]
 
 dependencies = [
     # Core ML — works on CUDA (Linux) and MPS (Apple Silicon)
     "torch>=2.3.0",
     "torchvision>=0.18.0",
-    "transformers>=4.46.0",
+    "transformers>=5.15.0",      # muse_glimmer arch lands in 5.15.0; no remote-code fallback
     "accelerate>=0.34.0",
     "peft>=0.12.0",
     "trl>=0.11.0",
@@ -37,6 +39,8 @@ dependencies = [
     "numpy>=1.26.0",
     "pillow>=10.0.0",
     "datasets>=2.20.0",
+    "huggingface-hub>=0.32.0",   # checkpoint cache inspection before loading weights
+    "pyarrow>=15.0.0",           # datasets Arrow backend
     # Experiment tracking
     "mlflow>=2.15.0",
     # Utilities
@@ -52,8 +56,16 @@ dependencies = [
 requires = ["hatchling"]
 build-backend = "hatchling.build"
 
+[project.urls]
+Repository = "https://github.com/neemiasbsilva/culture-mllm"
+
 [dependency-groups]
 dev = [
+    "pytest>=8.0.0",
+    "ruff>=0.9,<1",
+    "mypy>=1.15,<2",
+    "pandas-stubs>=2.2",
+    "types-PyYAML",
     "ipykernel>=6.29.0",
     "jupyter>=1.0.0",
     "matplotlib>=3.9.0",
@@ -69,3 +81,51 @@ apple = [
 
 [tool.hatch.build.targets.wheel]
 packages = ["src"]
+
+[tool.pytest.ini_options]
+minversion = "8.0"
+testpaths = ["tests"]
+pythonpath = ["."]
+python_files = ["test_*.py"]
+addopts = "-q --strict-markers --strict-config"
+markers = [
+    "integration: needs annotation outputs or trained checkpoints on disk",
+]
+
+[tool.ruff]
+target-version = "py311"
+line-length = 100
+src = ["src", "tests"]
+
+[tool.ruff.lint]
+select = ["E", "F", "I", "UP", "B", "SIM", "RUF"]
+# The study notation is Unicode on purpose: sigma-3 P-5 is written σ₃P₅ throughout.
+ignore = ["RUF001", "RUF002", "RUF003"]
+
+[tool.ruff.lint.isort]
+known-first-party = ["src"]
+
+[tool.ruff.lint.per-file-ignores]
+"tests/*" = ["E501"]
+# The Mermaid source is emitted verbatim; rewrapping it would change the diagram.
+"scripts/generate_architecture_diagram.py" = ["E501"]
+
+[tool.mypy]
+python_version = "3.11"
+files = ["src", "tests"]
+strict = true
+warn_unreachable = true
+show_error_codes = true
+pretty = true
+
+[[tool.mypy.overrides]]
+module = [
+    "torch.*", "torchvision.*", "transformers.*", "trl.*", "peft.*",
+    "bitsandbytes.*", "datasets.*", "accelerate.*", "einops.*",
+    "qwen_vl_utils.*", "langgraph.*", "langchain_ollama.*", "langchain_core.*",
+    "sentence_transformers.*", "bertopic.*", "umap.*", "hdbscan.*",
+    "vaderSentiment.*", "sklearn.*", "scipy.*", "bert_score.*",
+    "rouge_score.*", "nltk.*", "mlflow.*", "mlx.*", "mlx_lm.*", "mlx_vlm.*",
+    "fire.*", "jsonschema.*", "huggingface_hub.*", "PIL.*",
+]
+ignore_missing_imports = true
