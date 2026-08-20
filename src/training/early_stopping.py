@@ -1,6 +1,7 @@
 """Sophisticated early stopping with EMA smoothing and warmup protection."""
 
 from math import inf
+from typing import Any
 
 
 class EarlyStopping:
@@ -53,7 +54,6 @@ class EarlyStopping:
         self.improved: bool = False
         self.best_epoch: int = 0
 
-    # ------------------------------------------------------------------
     def step(self, val_metric: float, epoch: int = 0) -> bool:
         """
         Advance one evaluation step.
@@ -61,18 +61,15 @@ class EarlyStopping:
         Returns True if training should stop.
         Sets self.improved=True whenever a new best is found.
         """
-        # EMA smoothing
         if self.smoothed is None:
             self.smoothed = val_metric
         else:
             self.smoothed = self.ema_alpha * val_metric + (1.0 - self.ema_alpha) * self.smoothed
 
-        # Warmup — don't start patience counting before min_epochs
         if epoch < self.min_epochs:
             self.improved = False
             return False
 
-        # Direction-aware improvement check
         if self.monitor == "f1":
             is_better = self.smoothed > self.best + self.min_delta
         else:
@@ -89,8 +86,7 @@ class EarlyStopping:
 
         return self.counter >= self.patience
 
-    # ------------------------------------------------------------------
-    def state_dict(self) -> dict:
+    def state_dict(self) -> dict[str, Any]:
         return {
             "best": self.best,
             "smoothed": self.smoothed,
@@ -98,7 +94,7 @@ class EarlyStopping:
             "best_epoch": self.best_epoch,
         }
 
-    def load_state_dict(self, state: dict) -> None:
+    def load_state_dict(self, state: dict[str, Any]) -> None:
         self.best = state["best"]
         self.smoothed = state.get("smoothed")
         self.counter = state["counter"]
