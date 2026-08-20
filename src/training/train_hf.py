@@ -1,10 +1,15 @@
 """
 HuggingFace LoRA fine-tuning — works on CUDA (Linux/RTX) and MPS (Apple Silicon).
 
-Training input: WVS cultural Q&A text only — no images, no visual SFT.
+Training input: WVS cultural Q&A text by default, or any chat-format JSONL
+(including visual SFT with image-path messages) via a config-level
+`data: {train_jsonl, val_jsonl}` section.
 Device is selected automatically: cuda > mps > cpu.
-Large models (e.g. gemma4_31b) use 4-bit QLoRA when quantization: "4bit"
-is set in the config and a CUDA device is available.
+How the base weights are loaded is declared by `training.quantization` and
+enforced by src/utils/model_loading.py: "4bit" for QLoRA via bitsandbytes,
+omitted for an immediate load. The config is validated against the checkpoint's
+own metadata before any weights are read, and the loaded base must beat uniform
+guessing on a real batch before the first optimizer step.
 
 Training automatically resumes from the latest checkpoint if one exists,
 and continues logging to the same MLflow run.
@@ -22,7 +27,9 @@ Usage:
 
 import argparse
 import os
+import sys
 from pathlib import Path
+from typing import Any, cast
 
 import mlflow
 import torch
@@ -30,17 +37,21 @@ import yaml
 from dotenv import load_dotenv
 from peft import LoraConfig, TaskType
 from rich.console import Console
-from sklearn.metrics import f1_score
 from transformers import (
     AutoModelForImageTextToText,
     AutoProcessor,
     TrainerCallback,
 )
-from trl import SFTConfig, SFTTrainer
+from trl import SFTConfig, SFTTrainer  # type: ignore[attr-defined]
 
 from src.data.dataset import load_hf_dataset
 from src.training.early_stopping import EarlyStopping
 from src.utils.device import get_device
+from src.utils.model_loading import (
+    build_base_model,
+    resolve_dtype,
+    validate_base_model_config,
+)
 
 load_dotenv()
 console = Console()
@@ -49,7 +60,7 @@ PROCESSED_DIR = Path("data/processed")
 CHECKPOINTS_DIR = Path("checkpoints")
 
 
-def load_config(config_path: str) -> dict:
+def load_config(config_path: str) -> dict[str, Any]:
     """Load a YAML training config.
 
     Args:
@@ -59,7 +70,143 @@ def load_config(config_path: str) -> dict:
         dict: Parsed configuration.
     """
     with open(config_path) as f:
-        return yaml.safe_load(f)
+        return cast(dict[str, Any], yaml.safe_load(f))
+
+
+def get_model_key(cfg: dict[str, Any], config_path: str | Path) -> str:
+    """Stable experiment/checkpoint identity, independent of config filename."""
+    return str(cfg.get("model", {}).get("key") or Path(config_path).stem)
+
+
+def checkpoint_output_dir(culture: str, model_name: str, condition: str) -> Path:
+    return CHECKPOINTS_DIR / culture / model_name / condition
+
+
+def _apply_soft_token_budget(image_processor: Any, max_pixels: int) -> dict[str, object] | None:
+    """Map a pixel ceiling onto token-budget processors (e.g. Gemma-4).
+
+    These resize each image so its patch count stays within
+    max_soft_tokens * pooling_kernel_size**2, so the pixel ceiling translates
+    to a soft-token count via (patch_size * pooling_kernel_size)**2 px/token.
+    The processor only accepts a fixed menu of soft-token counts, so the
+    largest one that fits the pixel budget is used, or the minimum supported
+    count when none fit.
+    """
+    max_soft_tokens = getattr(image_processor, "max_soft_tokens", None)
+    patch_size = getattr(image_processor, "patch_size", None)
+    pooling_kernel_size = getattr(image_processor, "pooling_kernel_size", None)
+    if not (max_soft_tokens and patch_size and pooling_kernel_size):
+        return None
+
+    pixels_per_token = (int(patch_size) * int(pooling_kernel_size)) ** 2
+    budget_tokens = max(1, max_pixels // pixels_per_token)
+    supported = getattr(
+        sys.modules.get(type(image_processor).__module__), "_SUPPORTED_SOFT_TOKENS", None
+    )
+    if supported:
+        fitting = [tokens for tokens in supported if tokens <= budget_tokens]
+        budget_tokens = max(fitting) if fitting else min(supported)
+    image_processor.max_soft_tokens = budget_tokens
+    return {
+        "max_soft_tokens": budget_tokens,
+        "effective_max_pixels": budget_tokens * pixels_per_token,
+    }
+
+
+def _apply_image_token_budget(image_processor: Any, max_pixels: int) -> dict[str, object] | None:
+    """Map a pixel ceiling onto merged-token processors (e.g. Muse Glimmer).
+
+    These carry no `size` at all — each image is resized so its merged-patch
+    grid stays within max_image_tokens, so the pixel ceiling translates to a
+    token count via (patch_size * merge_size)**2 px/token.
+    """
+    max_image_tokens = getattr(image_processor, "max_image_tokens", None)
+    patch_size = getattr(image_processor, "patch_size", None)
+    merge_size = getattr(image_processor, "merge_size", None)
+    if not (max_image_tokens and patch_size and merge_size):
+        return None
+
+    pixels_per_token = (int(patch_size) * int(merge_size)) ** 2
+    budget_tokens = max(1, max_pixels // pixels_per_token)
+    image_processor.max_image_tokens = budget_tokens
+    return {
+        "max_image_tokens": budget_tokens,
+        "effective_max_pixels": budget_tokens * pixels_per_token,
+    }
+
+
+def _size_get(size: Any, key: str) -> Any:
+    """Read a field from either a plain dict or a transformers SizeDict."""
+    if isinstance(size, dict):
+        return size.get(key)
+    return getattr(size, key, None)
+
+
+def _size_set(size: Any, key: str, value: Any) -> None:
+    if isinstance(size, dict):
+        size[key] = value
+    else:
+        setattr(size, key, value)
+
+
+def configure_processor_image_budget(processor: Any, max_pixels: int | None) -> dict[str, object]:
+    """Apply the configured image budget across Qwen/Gemma processor shapes.
+
+    Fixed-resolution processors expose size.height/width; their aspect ratio is
+    preserved while the area is reduced to the configured ceiling. Qwen-VL-family
+    processors instead store pixel-AREA budgets (min_pixels / max_pixels) in
+    size.shortest_edge / size.longest_edge.
+    """
+    if max_pixels is None:
+        return {}
+    max_pixels = int(max_pixels)
+    if max_pixels < 1:
+        raise ValueError("model.image_max_pixels must be >= 1")
+    image_processor = getattr(processor, "image_processor", None)
+    if image_processor is None:
+        raise ValueError("Active VLM processor has no image_processor")
+
+    applied: dict[str, object] = {"max_pixels": max_pixels}
+    handled = False
+    if hasattr(image_processor, "max_pixels"):
+        image_processor.max_pixels = max_pixels
+        handled = True
+    size = getattr(image_processor, "size", None)
+    height, width = _size_get(size, "height"), _size_get(size, "width")
+    if height and width:
+        height, width = int(height), int(width)
+        scale = min(1.0, (max_pixels / max(1, height * width)) ** 0.5)
+        _size_set(size, "height", max(1, int(height * scale)))
+        _size_set(size, "width", max(1, int(width * scale)))
+        applied["size"] = {
+            "height": _size_get(size, "height"),
+            "width": _size_get(size, "width"),
+        }
+        handled = True
+    elif _size_get(size, "longest_edge") and hasattr(image_processor, "merge_size"):
+        _size_set(size, "longest_edge", max_pixels)
+        shortest_edge = _size_get(size, "shortest_edge")
+        if shortest_edge and int(shortest_edge) > max_pixels:
+            _size_set(size, "shortest_edge", max_pixels)
+        applied["size"] = {
+            "shortest_edge": _size_get(size, "shortest_edge"),
+            "longest_edge": max_pixels,
+        }
+        handled = True
+    else:
+        token_budget = _apply_soft_token_budget(image_processor, max_pixels)
+        if token_budget is None:
+            token_budget = _apply_image_token_budget(image_processor, max_pixels)
+        if token_budget is not None:
+            applied.update(token_budget)
+            handled = True
+    if not handled:
+        raise ValueError(
+            "Cannot apply model.image_max_pixels to this image processor; "
+            "configure a supported max_pixels, height/width, pixel-area "
+            "longest_edge, max_soft_tokens, or max_image_tokens processor"
+        )
+    return applied
 
 
 def get_wvs_paths(culture: str) -> tuple[Path, Path | None]:
@@ -71,7 +218,7 @@ def get_wvs_paths(culture: str) -> tuple[Path, Path | None]:
             f"Run: uv run python src/data/culture_training_data.py --culture {culture}"
         )
     with open(src) as f:
-        lines = [l for l in f if l.strip()]
+        lines = [line for line in f if line.strip()]
     n_val = max(1, len(lines) // 10)
     train_lines, val_lines = lines[:-n_val], lines[-n_val:]
     train_path = PROCESSED_DIR / culture / "wvs_cultural_train.jsonl"
@@ -82,6 +229,37 @@ def get_wvs_paths(culture: str) -> tuple[Path, Path | None]:
         f.writelines(val_lines)
     console.print(f"  WVS split: {len(train_lines)} train / {len(val_lines)} val")
     return train_path, val_path
+
+
+def get_data_paths(cfg: dict[str, Any], culture: str) -> tuple[Path, Path | None]:
+    """Return (train_jsonl, val_jsonl): explicit `data:` section if present, else WVS split."""
+    data_cfg = cfg.get("data")
+    if not data_cfg:
+        return get_wvs_paths(culture)
+    train = Path(data_cfg["train_jsonl"])
+    if not train.exists():
+        raise FileNotFoundError(f"Training data not found: {train}")
+    val = Path(data_cfg["val_jsonl"]) if data_cfg.get("val_jsonl") else None
+    return train, (val if val and val.exists() else None)
+
+
+def load_training_datasets(cfg: dict[str, Any], culture: str) -> tuple[Any, Any, dict[str, int]]:
+    """Load the WVS JSONL training and validation splits."""
+    data_cfg = cfg.get("data") or {}
+    data_format = str(data_cfg.get("format", "jsonl")).lower()
+    if data_format != "jsonl":
+        raise ValueError(f"Unsupported data.format: {data_format!r}")
+    train_jsonl, val_jsonl = get_data_paths(cfg, culture)
+    train_dataset = load_hf_dataset(train_jsonl)
+    val_dataset = load_hf_dataset(val_jsonl) if val_jsonl and val_jsonl.exists() else None
+    return (
+        train_dataset,
+        val_dataset,
+        {
+            "train_rows": len(train_dataset),
+            "val_rows": len(val_dataset) if val_dataset is not None else 0,
+        },
+    )
 
 
 def _find_last_checkpoint(output_dir: str) -> str | None:
@@ -111,6 +289,7 @@ def _is_training_complete(output_dir: str, run_name: str = "", experiment_name: 
     if run_name and experiment_name:
         try:
             from mlflow.tracking import MlflowClient
+
             client = MlflowClient()
             exp = client.get_experiment_by_name(experiment_name)
             if exp:
@@ -143,7 +322,7 @@ def _save_mlflow_run_id(output_dir: str, run_id: str) -> None:
     (Path(output_dir) / _MLFLOW_RUN_ID_FILE).write_text(run_id)
 
 
-def _resume_mlflow_run(output_dir: str, run_name: str):
+def _resume_mlflow_run(output_dir: str, run_name: str) -> tuple[str | None, bool]:
     """Return (run_id_to_use, is_new).
 
     Always reuses the saved run — resetting it to RUNNING if needed — so that
@@ -164,73 +343,73 @@ def _resume_mlflow_run(output_dir: str, run_name: str):
             console.print(f"  Continuing MLflow run [bold]{saved_run_id}[/bold] (was {status})")
             return saved_run_id, False
         except Exception as exc:
-            console.print(f"  [yellow]Cannot reopen MLflow run {saved_run_id} ({exc}) — starting new run[/yellow]")
+            console.print(
+                f"  [yellow]Cannot reopen MLflow run {saved_run_id} ({exc}) — "
+                "starting new run[/yellow]"
+            )
     return None, True
 
 
-def preprocess_logits_for_metrics(logits, labels):
-    """Reduce full-vocab logits to predicted token IDs before accumulation.
+def preprocess_logits_for_metrics(logits: Any, labels: Any) -> torch.Tensor:
+    """Reduce [B, T, V] logits to per-token predictive entropy [B, T].
 
-    Avoids OOM when storing logits for the full vocabulary across eval batches.
+    Storing full-vocab logits across eval batches OOMs; entropy is computed
+    per micro-batch and only the [B, T] result is accumulated. The float32
+    upcast keeps log_softmax numerically stable for bf16 models.
     """
     if isinstance(logits, tuple):
         logits = logits[0]
-    return logits.argmax(-1)
+    logp = torch.nn.functional.log_softmax(logits.float(), dim=-1)
+    return -(logp.exp() * logp).sum(dim=-1)
 
 
-def compute_metrics_fn(eval_preds) -> dict:
-    """Compute macro-averaged F1 over non-padding tokens.
+def compute_metrics_fn(eval_preds: Any) -> dict[str, float]:
+    """Mean next-token predictive entropy (nats) over supervised tokens.
+
+    Positions with label -100 (prompt, image, and padding tokens) are
+    excluded. Logits at position t predict token t+1, hence the one-step
+    shift before masking.
 
     Args:
-        eval_preds: (predictions, labels) tuple from the Trainer.
+        eval_preds: (per_token_entropy, labels) tuple from the Trainer,
+            both [N, T] arrays.
 
     Returns:
-        dict: {"eval_f1_macro": float}
+        dict: {"entropy": float} — logged by the Trainer as eval_entropy.
     """
-    preds, labels = eval_preds
-    preds = preds.flatten()
-    labels = labels.flatten()
-    mask = labels != -100
-    f1 = f1_score(labels[mask], preds[mask], average="macro", zero_division=0)
-    return {"eval_f1_macro": f1}
+    entropies, labels = eval_preds
+    ent = entropies[:, :-1]
+    lab = labels[:, 1:]
+    mask = lab != -100
+    return {"entropy": float(ent[mask].mean())}
 
 
-def _patch_supports_quant_method() -> None:
-    """Guard AutoHfQuantizer.supports_quant_method against None input.
-
-    Transformers bug (>=5.x): hasattr(config, "quantization_config") returns
-    True even when the value is None (class-level attribute), so
-    supports_quant_method() receives None and crashes on None.get().
-    """
-    from transformers.quantizers.auto import AutoHfQuantizer as _AHQ
-    _orig = _AHQ.supports_quant_method
-    if getattr(_orig, "_none_guarded", False):
-        return
-
-    def _safe(qcfg):
-        return False if qcfg is None else _orig(qcfg)
-
-    _safe._none_guarded = True
-    _AHQ.supports_quant_method = staticmethod(_safe)
-
-
-def _check_vram_headroom(model_cfg: dict, quant_cfg, device: str) -> None:
+def _check_vram_headroom(model_cfg: dict[str, Any], quantization: str | None, device: str) -> None:
     """Fail fast with a clear message if the model cannot fit in GPU VRAM.
+
+    Checks free VRAM as well as total: this box has one GPU shared with the
+    machine-bias-reproduction runs, so a model that fits the card in principle
+    can still OOM a third of the way through weight loading.
+
+    The checkpoint size is estimated from the local HuggingFace cache; a model
+    that is not cached yet is left alone so the download and load proceed
+    naturally. The 3 GB of headroom covers the LoRA parameters, activations,
+    and optimizer state, and the 0.25 ratio for "4bit" reflects NF4 compressing
+    16-bit weights to 4-bit.
 
     Args:
         model_cfg: model section of the YAML config.
-        quant_cfg: BitsAndBytesConfig if 4-bit is requested, else None.
+        quantization: declared quantization strategy, or None for immediate load.
         device: resolved device string ("cuda", "mps", "cpu").
     """
     if device != "cuda":
         return
 
-    from huggingface_hub import scan_cache_dir
     import torch
+    from huggingface_hub import scan_cache_dir
 
     model_id = model_cfg["id"]
 
-    # Estimate checkpoint size from local HF cache
     try:
         cache = scan_cache_dir()
         repo = next((r for r in cache.repos if r.repo_id == model_id), None)
@@ -239,58 +418,130 @@ def _check_vram_headroom(model_cfg: dict, quant_cfg, device: str) -> None:
         checkpoint_bytes = 0
 
     if checkpoint_bytes == 0:
-        return  # Not cached yet; let the download + load proceed naturally
+        return
 
-    checkpoint_gb = checkpoint_bytes / 1024 ** 3
+    checkpoint_gb = checkpoint_bytes / 1024**3
     free_bytes, total_bytes = torch.cuda.mem_get_info(0)
-    free_gb = free_bytes / 1024 ** 3
-    total_gb = total_bytes / 1024 ** 3
+    free_gb = free_bytes / 1024**3
+    total_gb = total_bytes / 1024**3
 
-    # Training headroom: LoRA params + activations + optimizer state
     headroom_gb = 3.0
-    # 4-bit NF4 compresses 16-bit weights to 4-bit (ratio 0.25); FP8/native loads as-is.
-    effective_gb = checkpoint_gb if quant_cfg is None else checkpoint_gb * 0.25
+    ratios: dict[str | None, float] = {"4bit": 0.25}
+    effective_gb = checkpoint_gb * ratios.get(quantization, 1.0)
+    required_gb = effective_gb + headroom_gb
 
-    if effective_gb + headroom_gb > total_gb:
-        quant_note = (
-            "BitsAndBytes 4-bit cannot be applied because the model is pre-quantized "
-            f"with a different scheme (check model config). "
-            if quant_cfg is not None
-            else "Add 'quantization: \"4bit\"' to your YAML training section to halve "
-            "the memory requirement — but only if the model is NOT already pre-quantized "
-            "with a different method (e.g. FP8), as mixing quantizers is not supported. "
-        )
+    def _fail(limit_name: str, limit_gb: float, advice: str) -> None:
         raise RuntimeError(
-            f"\nModel '{model_id}' cannot fit on this GPU.\n"
-            f"  Checkpoint : {checkpoint_gb:.1f} GB\n"
-            f"  Effective  : {effective_gb:.1f} GB (after quantization if any)\n"
+            f"\nModel '{model_id}' cannot fit on this GPU ({limit_name}).\n"
+            f"  Checkpoint : {checkpoint_gb:.1f} GB on disk\n"
+            f"  Effective  : {effective_gb:.1f} GB resident "
+            f"(quantization: {quantization or 'none'})\n"
+            f"  Headroom   : {headroom_gb:.1f} GB (LoRA + activations)\n"
+            f"  Required   : {required_gb:.1f} GB\n"
             f"  GPU total  : {total_gb:.1f} GB\n"
             f"  Free now   : {free_gb:.1f} GB\n"
-            f"  Headroom   : {headroom_gb:.1f} GB (LoRA + activations)\n"
-            f"\n{quant_note}"
-            "No further adjustments are possible for this model on this hardware."
+            f"\n{advice}"
+        )
+
+    if required_gb > total_gb:
+        _fail(
+            "exceeds the card",
+            total_gb,
+            "Add 'quantization: \"4bit\"' to the training section to cut the weight "
+            "footprint to a quarter — but only for a checkpoint that is not already "
+            "pre-quantized, since quantizers cannot be stacked. Otherwise this model "
+            "does not fit on this hardware.",
+        )
+
+    if required_gb > free_gb:
+        _fail(
+            "fits the card, but not right now",
+            free_gb,
+            f"{total_gb - free_gb:.1f} GB is held by another process — most likely a "
+            "machine-bias-reproduction run on the same GPU. Check with `nvidia-smi` "
+            "and start again once it drains.",
         )
 
 
-def _build_quantization_config(train_cfg: dict, device: str):
-    """Return BitsAndBytesConfig for QLoRA when requested, else None."""
-    if train_cfg.get("quantization") != "4bit" or device != "cuda":
-        return None
-    from transformers import BitsAndBytesConfig
-    return BitsAndBytesConfig(
-        load_in_4bit=True,
-        bnb_4bit_compute_dtype=torch.bfloat16,
-        bnb_4bit_quant_type="nf4",
-        bnb_4bit_use_double_quant=True,
-    )
+def _assert_base_is_sane(trainer: Any, model: Any, processor: Any) -> tuple[float, float]:
+    """Verify the loaded base beats uniform guessing before spending a run on it.
+
+    A pretrained model scoring no better than chance on its own training
+    distribution has been loaded wrong, and no amount of LoRA will recover it —
+    the adapter just grows to compensate for a broken forward pass; a corrupt
+    load once drove nine adapters to a mean update norm of 16,977 where healthy
+    runs sit near 0.5. Cheaper to learn that in one forward pass than in 3,900
+    steps.
+
+    Args:
+        trainer: The constructed SFTTrainer, used for its real collated batch.
+        model: The PEFT-wrapped model to score.
+        processor: Processor, for the tokenizer vocabulary as a fallback.
+
+    Returns:
+        tuple[float, float]: (loss, loss / ln(vocab_size)).
+
+    Raises:
+        RuntimeError: If the base does no better than uniform guessing.
+    """
+    import math
+
+    text_config = model.config.get_text_config()
+    vocab_size = getattr(text_config, "vocab_size", None) or len(processor.tokenizer)
+    guess_loss = math.log(vocab_size)
+
+    batch = next(iter(trainer.get_train_dataloader()))
+    batch = {
+        key: value.to(model.device) if hasattr(value, "to") else value
+        for key, value in batch.items()
+    }
+    was_training = model.training
+    model.eval()
+    try:
+        with torch.no_grad():
+            loss = float(model(**batch).loss)
+    finally:
+        model.train(was_training)
+
+    ratio = loss / guess_loss
+    if ratio >= 1.0:
+        raise RuntimeError(
+            f"\nThe base model scores worse than uniform guessing — it is not loaded "
+            f"correctly.\n"
+            f"  Forward loss : {loss:.4f}\n"
+            f"  ln(vocab)    : {guess_loss:.4f}  (vocab_size {vocab_size})\n"
+            f"  Ratio        : {ratio:.2f}  (healthy runs land at 0.35-0.85)\n"
+            f"\nTraining from here produces an adapter that only makes sense on top of "
+            "this broken load, and is unusable anywhere else. Check `model.dtype` and "
+            "`training.quantization` against the checkpoint — a load that drops or "
+            "misreads the metadata stored alongside the weights leaves values orders "
+            "of magnitude off."
+        )
+    if ratio >= 0.9:
+        console.print(
+            f"[yellow]  Base health: loss {loss:.4f} vs ln(vocab) {guess_loss:.4f} "
+            f"(ratio {ratio:.2f}) — close to chance, verify the load[/yellow]"
+        )
+    else:
+        console.print(
+            f"[green]  Base health: loss {loss:.4f} vs ln(vocab) {guess_loss:.4f} "
+            f"(ratio {ratio:.2f})[/green]"
+        )
+    return loss, ratio
 
 
-def train(cfg: dict, model_name: str, culture: str, debug: bool) -> None:
+def train(cfg: dict[str, Any], model_name: str, culture: str, debug: bool) -> None:
     """Run LoRA fine-tuning for one (model, culture) pair.
 
     Resumes from the latest checkpoint and reuses the existing MLflow run
     if both exist. Marks completion via a sentinel file to allow idempotent
-    reruns from the orchestration script.
+    reruns from the orchestration script. The tracking URI is set before the
+    completion check so that the MLflow query behind it works.
+
+    The base weights are placed on a single GPU by the device_map={"": device}
+    inside build_base_model, which avoids pre-computing a map from parameter
+    counts: balanced_low_0 over-estimates and spills layers to the meta device,
+    which breaks LoRA backprop.
 
     Args:
         cfg (dict): Parsed YAML config (model, lora, training, mlflow sections).
@@ -302,15 +553,15 @@ def train(cfg: dict, model_name: str, culture: str, debug: bool) -> None:
     lora_cfg = cfg["lora"]
     train_cfg = cfg["training"]
 
-    output_dir = str(CHECKPOINTS_DIR / culture / model_name / "cultural")
-    run_name   = f"{model_name}_{culture}_cultural"
+    condition = cfg.get("condition", "cultural")
+    output_dir = str(checkpoint_output_dir(culture, model_name, condition))
+    run_name = f"{model_name}_{culture}_{condition}"
 
-    # Set tracking URI before the completion check so the MLflow query works.
-    tracking_uri     = cfg.get("mlflow", {}).get("tracking_uri", "http://127.0.0.1:5000")
-    experiment_name  = cfg["mlflow"]["experiment"]
+    tracking_uri = cfg.get("mlflow", {}).get("tracking_uri", "http://127.0.0.1:5000")
+    experiment_name = cfg["mlflow"]["experiment"]
     mlflow.set_tracking_uri(tracking_uri)
     mlflow.set_experiment(experiment_name)
-    os.environ["MLFLOW_TRACKING_URI"]    = tracking_uri
+    os.environ["MLFLOW_TRACKING_URI"] = tracking_uri
     os.environ["MLFLOW_EXPERIMENT_NAME"] = experiment_name
 
     if _is_training_complete(output_dir, run_name, experiment_name):
@@ -321,36 +572,27 @@ def train(cfg: dict, model_name: str, culture: str, debug: bool) -> None:
     console.print(f"Device    : [bold]{device}[/bold]")
     console.print(f"Loading model [bold]{model_cfg['id']}[/bold]...")
 
-    quant_cfg = _build_quantization_config(train_cfg, device)
-    if quant_cfg is not None:
-        console.print("  [yellow]4-bit QLoRA active (bitsandbytes)[/yellow]")
+    quantization = validate_base_model_config(model_cfg["id"], model_cfg, train_cfg)
+    torch_dtype = resolve_dtype(model_cfg)
+    if quantization:
+        console.print(f"  [yellow]Quantization: {quantization}[/yellow]")
 
     try:
-        import flash_attn  # noqa: F401
+        import flash_attn  # type: ignore[import-not-found] # noqa: F401
+
         attn_impl = "flash_attention_2" if device == "cuda" else "eager"
     except ImportError:
         attn_impl = "eager"
 
-    dtype_str = model_cfg.get("dtype", "bfloat16")
-    torch_dtype = torch.bfloat16 if dtype_str != "auto" else "auto"
-
-    _check_vram_headroom(model_cfg, quant_cfg, device)
-    _patch_supports_quant_method()
-    # {"": device} puts the entire model on one GPU without pre-computing a device
-    # map from BF16 parameter counts — balanced_low_0 estimates 60 GB for a 30 GB
-    # FP8 model and spills layers to meta, which breaks LoRA backprop.
-    model = AutoModelForImageTextToText.from_pretrained(
+    _check_vram_headroom(model_cfg, quantization, device)
+    model = build_base_model(
         model_cfg["id"],
-        quantization_config=quant_cfg,
-        torch_dtype=torch_dtype,
-        device_map={"": device} if device == "cuda" else None,
-        low_cpu_mem_usage=True,
-        trust_remote_code=True,
+        auto_class=AutoModelForImageTextToText,
+        quantization=quantization,
+        dtype=torch_dtype,
+        device=device,
         attn_implementation=attn_impl,
     )
-    # Explicit placement only when not using device_map
-    if device != "cuda":
-        model = model.to(device)
 
     meta_params = [n for n, p in model.named_parameters() if p.device.type == "meta"]
     if meta_params:
@@ -365,7 +607,12 @@ def train(cfg: dict, model_name: str, culture: str, debug: bool) -> None:
     if train_cfg.get("gradient_checkpointing", False):
         model.gradient_checkpointing_enable()
 
-    processor = AutoProcessor.from_pretrained(model_cfg["id"], trust_remote_code=True)
+    processor = AutoProcessor.from_pretrained(  # type: ignore[no-untyped-call]
+        model_cfg["id"], trust_remote_code=True
+    )
+    image_budget = configure_processor_image_budget(processor, model_cfg.get("image_max_pixels"))
+    if image_budget:
+        console.print(f"  Image processor budget: {image_budget}")
     processor.tokenizer.model_max_length = train_cfg["max_seq_len"]
 
     peft_config = LoraConfig(
@@ -378,9 +625,7 @@ def train(cfg: dict, model_name: str, culture: str, debug: bool) -> None:
         bias="none",
     )
 
-    train_jsonl, val_jsonl = get_wvs_paths(culture)
-    train_dataset = load_hf_dataset(train_jsonl)
-    val_dataset = load_hf_dataset(val_jsonl) if val_jsonl and val_jsonl.exists() else None
+    train_dataset, val_dataset, data_stats = load_training_datasets(cfg, culture)
 
     Path(output_dir).mkdir(parents=True, exist_ok=True)
 
@@ -389,10 +634,14 @@ def train(cfg: dict, model_name: str, culture: str, debug: bool) -> None:
         console.print(f"  Resuming from checkpoint [bold]{last_checkpoint}[/bold]")
 
     resume_run_id, is_new = _resume_mlflow_run(output_dir, run_name)
-    with mlflow.start_run(run_id=resume_run_id, run_name=run_name if is_new else None) as active_run:
+    with mlflow.start_run(
+        run_id=resume_run_id, run_name=run_name if is_new else None
+    ) as active_run:
         if is_new:
             _save_mlflow_run_id(output_dir, active_run.info.run_id)
             console.print(f"  New MLflow run [bold]{active_run.info.run_id}[/bold]")
+
+        mlflow.log_params({f"data_{key}": value for key, value in data_stats.items()})
 
         use_bf16 = device in ("cuda", "mps")
 
@@ -412,12 +661,14 @@ def train(cfg: dict, model_name: str, culture: str, debug: bool) -> None:
             save_strategy="steps",
             save_steps=train_cfg["save_steps"],
             load_best_model_at_end=bool(val_dataset),
-            metric_for_best_model="eval_f1_macro" if val_dataset else None,
-            greater_is_better=True,
+            metric_for_best_model="eval_loss" if val_dataset else None,
+            greater_is_better=False,
             report_to="mlflow",
             logging_steps=train_cfg["logging_steps"],
             max_grad_norm=train_cfg["max_grad_norm"],
             run_name=run_name,
+            max_length=train_cfg["max_seq_len"],
+            assistant_only_loss=bool(train_cfg.get("assistant_only_loss", False)),
         )
 
         trainer = SFTTrainer(
@@ -426,6 +677,7 @@ def train(cfg: dict, model_name: str, culture: str, debug: bool) -> None:
             train_dataset=train_dataset,
             eval_dataset=val_dataset,
             peft_config=peft_config,
+            processing_class=processor,
             compute_metrics=compute_metrics_fn if val_dataset else None,
             preprocess_logits_for_metrics=preprocess_logits_for_metrics if val_dataset else None,
         )
@@ -433,25 +685,43 @@ def train(cfg: dict, model_name: str, culture: str, debug: bool) -> None:
         stopper = EarlyStopping(
             patience=train_cfg["early_stopping_patience"],
             min_epochs=train_cfg.get("early_stopping_min_epochs", 10),
-            monitor="f1",
+            monitor="loss",
         )
 
         class _EarlyStopCallback(TrainerCallback):
-            """Trainer callback that triggers early stopping via EarlyStopping."""
+            """Trainer callback that triggers early stopping on validation loss."""
 
-            def on_evaluate(self, args, state, control, metrics, **kwargs):
-                val_f1 = metrics.get("eval_f1_macro", 0.0)
+            def on_evaluate(  # type: ignore[override]
+                self,
+                args: Any,
+                state: Any,
+                control: Any,
+                metrics: Any,
+                **kwargs: Any,
+            ) -> None:
+                val_loss = metrics.get("eval_loss")
+                if val_loss is None:
+                    return
                 epoch = int(state.epoch or 0)
-                if stopper.step(val_f1, epoch=epoch):
+                if stopper.step(val_loss, epoch=epoch):
                     control.should_training_stop = True
                     console.print(
                         f"[yellow]Early stopping at step {state.global_step} "
-                        f"(best F1={stopper.best:.4f} @ epoch {stopper.best_epoch})[/yellow]"
+                        f"(best loss={stopper.best:.4f} @ epoch {stopper.best_epoch})[/yellow]"
                     )
                 if stopper.improved:
-                    console.print(f"[green]New best val F1: {val_f1:.4f} at epoch {epoch}[/green]")
+                    entropy = metrics.get("eval_entropy", float("nan"))
+                    console.print(
+                        f"[green]New best val loss: {val_loss:.4f} "
+                        f"(entropy {entropy:.3f} nats) at epoch {epoch}[/green]"
+                    )
 
         trainer.add_callback(_EarlyStopCallback())
+
+        base_loss, base_ratio = _assert_base_is_sane(trainer, model, processor)
+        mlflow.log_metric("base_health_loss", base_loss)
+        mlflow.log_metric("base_health_loss_over_guess", base_ratio)
+
         trainer.train(resume_from_checkpoint=last_checkpoint)
         trainer.save_model(output_dir)
         processor.save_pretrained(output_dir)
@@ -460,15 +730,17 @@ def train(cfg: dict, model_name: str, culture: str, debug: bool) -> None:
 
 
 def main() -> None:
-    parser = argparse.ArgumentParser(description="HuggingFace LoRA training for culture-mllm (CUDA + MPS).")
+    parser = argparse.ArgumentParser(
+        description="HuggingFace LoRA training for culture-mllm (CUDA + MPS)."
+    )
     parser.add_argument("--config", required=True)
     parser.add_argument("--culture", required=True)
     parser.add_argument("--debug", action="store_true", help="1 epoch only")
     args = parser.parse_args()
 
-    console.rule("[bold blue]culture-mllm HF Training — WVS text only[/bold blue]")
+    console.rule("[bold blue]culture-mllm Hugging Face LoRA Training[/bold blue]")
     cfg = load_config(args.config)
-    model_name = Path(args.config).stem
+    model_name = get_model_key(cfg, args.config)
 
     console.print(f"Model     : {cfg['model']['id']}")
     console.print(f"Culture   : {args.culture}")
