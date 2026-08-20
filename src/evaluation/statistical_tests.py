@@ -26,22 +26,29 @@ Usage:
 import argparse
 import itertools
 from pathlib import Path
+from typing import Any
 
 import numpy as np
 import pandas as pd
-from scipy import stats
 from scipy.stats import ttest_rel
 
 CULTURES = [
-    "arabic", "bengali", "chinese", "english", "german",
-    "korean", "portuguese", "spanish", "turkish",
+    "arabic",
+    "bengali",
+    "chinese",
+    "english",
+    "german",
+    "korean",
+    "portuguese",
+    "spanish",
+    "turkish",
 ]
 MODELS = ["qwen3_5_2b", "phi4", "gemma4_e2b"]
 N_FOLDS = 5
 ALPHA = 0.05
 
 
-def load_fold_metrics(path: str, metric: str) -> dict:
+def load_fold_metrics(path: str, metric: str) -> dict[tuple[str, str, str], list[float]]:
     """Load per-fold metric values grouped by (model_name, culture, condition).
 
     Args:
@@ -52,7 +59,7 @@ def load_fold_metrics(path: str, metric: str) -> dict:
         dict: {(model_name, culture, condition): [fold_1_value, ..., fold_N_value]}
     """
     df = pd.read_csv(path)
-    groups: dict[tuple, list] = {}
+    groups: dict[tuple[str, str, str], list[float]] = {}
     for _, row in df.iterrows():
         key = (str(row["model_name"]), str(row["culture"]), str(row["condition"]))
         groups.setdefault(key, []).append(float(row[metric]))
@@ -60,23 +67,27 @@ def load_fold_metrics(path: str, metric: str) -> dict:
 
 
 def run_all_comparisons(
-    groups: dict[tuple, list], alpha: float = ALPHA
-) -> list[dict]:
-    """Run all pairwise t-tests and collect raw p-values."""
-    comparisons = []
+    groups: dict[tuple[str, str, str], list[float]], alpha: float = ALPHA
+) -> list[dict[str, Any]]:
+    """Run all pairwise t-tests and collect raw p-values.
+
+    Only pairs that differ on exactly one dimension (model, culture, or
+    condition) are compared; pairs differing on more than one dimension are
+    skipped because their difference cannot be attributed to a single factor.
+    """
+    comparisons: list[dict[str, Any]] = []
     keys = list(groups.keys())
 
     for k1, k2 in itertools.combinations(keys, 2):
         model1, culture1, cond1 = k1
         model2, culture2, cond2 = k2
 
-        # Only compare pairs that differ on one dimension
         same_model = model1 == model2
         same_culture = culture1 == culture2
         same_cond = cond1 == cond2
 
         if sum([not same_model, not same_culture, not same_cond]) != 1:
-            continue  # skip multi-dimensional differences
+            continue
 
         v1 = groups[k1]
         v2 = groups[k2]
@@ -87,32 +98,47 @@ def run_all_comparisons(
         t_stat, p_val = ttest_rel(v1[:n], v2[:n])
         delta_mean = float(np.mean(np.array(v1[:n]) - np.array(v2[:n])))
 
-        comparisons.append({
-            "model_a": model1, "culture_a": culture1, "condition_a": cond1,
-            "model_b": model2, "culture_b": culture2, "condition_b": cond2,
-            "n_folds": n,
-            "t_stat": round(t_stat, 4),
-            "p_raw": p_val,
-            "delta_mean": round(delta_mean, 6),
-            "comparison_type": (
-                "cultural_vs_baseline" if not same_cond
-                else ("cross_architecture" if not same_model
-                      else "cross_culture")
-            ),
-        })
+        comparisons.append(
+            {
+                "model_a": model1,
+                "culture_a": culture1,
+                "condition_a": cond1,
+                "model_b": model2,
+                "culture_b": culture2,
+                "condition_b": cond2,
+                "n_folds": n,
+                "t_stat": round(t_stat, 4),
+                "p_raw": p_val,
+                "delta_mean": round(delta_mean, 6),
+                "comparison_type": (
+                    "cultural_vs_baseline"
+                    if not same_cond
+                    else ("cross_architecture" if not same_model else "cross_culture")
+                ),
+            }
+        )
 
     return comparisons
 
 
-def apply_holm_bonferroni(comparisons: list[dict], alpha: float = ALPHA) -> list[dict]:
-    """Apply Holm-Bonferroni correction in-place; returns sorted list."""
+def apply_holm_bonferroni(
+    comparisons: list[dict[str, Any]], alpha: float = ALPHA
+) -> list[dict[str, Any]]:
+    """Apply Holm-Bonferroni correction in-place; returns sorted list.
+
+    Holm adjusted p-values are the cumulative maximum of the step-down
+    products.  Omitting that monotonicity step can make a less significant
+    comparison receive a smaller adjusted p-value than an earlier one.
+    """
     if not comparisons:
         return comparisons
     comparisons = sorted(comparisons, key=lambda x: x["p_raw"])
     n = len(comparisons)
+    running_max = 0.0
     for rank, comp in enumerate(comparisons):
-        p_adj = comp["p_raw"] * (n - rank)
-        comp["p_adj"] = round(min(p_adj, 1.0), 6)
+        p_adj = float(comp["p_raw"]) * (n - rank)
+        running_max = max(running_max, p_adj)
+        comp["p_adj"] = round(min(running_max, 1.0), 6)
         comp["significant"] = comp["p_adj"] < alpha
     return comparisons
 
@@ -155,9 +181,13 @@ def generate_latex_table(
 
 
 def main() -> None:
-    parser = argparse.ArgumentParser(description="Holm-Bonferroni corrected t-tests for CultureVLM.")
+    parser = argparse.ArgumentParser(
+        description="Holm-Bonferroni corrected t-tests for CultureVLM."
+    )
     parser.add_argument("--fold-metrics", default="outputs/training/fold_metrics.csv")
-    parser.add_argument("--metric", default="f1_macro", choices=["f1_macro", "f1_weighted", "mae", "qwk"])
+    parser.add_argument(
+        "--metric", default="f1_macro", choices=["f1_macro", "f1_weighted", "mae", "qwk"]
+    )
     parser.add_argument("--output", default="outputs/training/stats/holm_ttests")
     parser.add_argument("--alpha", type=float, default=ALPHA)
     parser.add_argument("--significant-only", action="store_true")
