@@ -29,11 +29,12 @@ Usage:
 """
 
 import argparse
-import os
+import contextlib
+import re
 import subprocess
 import threading
-import re
 from pathlib import Path
+from typing import IO, Any, cast
 
 import mlflow
 import yaml
@@ -57,12 +58,13 @@ def _mlx_available() -> bool:
     """
     try:
         import mlx  # noqa: F401
+
         return True
     except ImportError:
         return False
 
 
-def load_config(config_path: str) -> dict:
+def load_config(config_path: str) -> dict[str, Any]:
     """Load a YAML training config.
 
     Args:
@@ -72,7 +74,7 @@ def load_config(config_path: str) -> dict:
         dict: Parsed configuration.
     """
     with open(config_path) as f:
-        return yaml.safe_load(f)
+        return cast(dict[str, Any], yaml.safe_load(f))
 
 
 def get_wvs_paths(culture: str, condition: str) -> tuple[Path, Path | None]:
@@ -89,7 +91,11 @@ def get_wvs_paths(culture: str, condition: str) -> tuple[Path, Path | None]:
         FileNotFoundError: If the source WVS JSONL does not exist.
     """
     culture_dir = PROCESSED_DIR / culture
-    filename = "wvs_cultural_anchoring.jsonl" if condition == "cultural" else "wvs_baseline_anchoring.jsonl"
+    filename = (
+        "wvs_cultural_anchoring.jsonl"
+        if condition == "cultural"
+        else "wvs_baseline_anchoring.jsonl"
+    )
     src = culture_dir / filename
 
     if not src.exists():
@@ -98,9 +104,8 @@ def get_wvs_paths(culture: str, condition: str) -> tuple[Path, Path | None]:
             f"Run: uv run python src/data/culture_training_data.py --culture {culture}"
         )
 
-    import json
     with open(src) as f:
-        lines = [l for l in f if l.strip()]
+        lines = [line for line in f if line.strip()]
 
     n_val = max(1, len(lines) // 10)
     train_lines, val_lines = lines[:-n_val], lines[-n_val:]
@@ -114,10 +119,7 @@ def get_wvs_paths(culture: str, condition: str) -> tuple[Path, Path | None]:
     with open(val_path, "w") as f:
         f.writelines(val_lines)
 
-    console.print(
-        f"  WVS split: {len(train_lines)} train / {len(val_lines)} val "
-        f"({filename})"
-    )
+    console.print(f"  WVS split: {len(train_lines)} train / {len(val_lines)} val ({filename})")
     return train_path, val_path
 
 
@@ -146,7 +148,7 @@ def _prepare_data_dir(train_jsonl: Path, val_jsonl: Path | None) -> Path:
 
 
 def run_mlx_lora(
-    cfg: dict,
+    cfg: dict[str, Any],
     train_jsonl: Path,
     val_jsonl: Path | None,
     checkpoint_dir: Path,
@@ -156,8 +158,13 @@ def run_mlx_lora(
     """Launch mlx_lm.lora as a subprocess and stream metrics to MLflow.
 
     Parses stdout with regex to extract train/val loss and logs each step via
-    the MLflow client. Early stopping is evaluated on every val loss line.
-    A background thread handles the stdout stream so proc.wait() doesn't block.
+    the MLflow client. The regexes match the report lines mlx_lm.lora prints,
+    of the forms "Iter N: Train loss X.XX, It/sec Y.YY" and "Iter N: Val loss X.XX".
+    Early stopping is evaluated on every val loss line. A background thread handles
+    the stdout stream so proc.wait() doesn't block.
+
+    A return code of -15 is the SIGTERM raised by this function's own
+    proc.terminate() when early stopping fires, so it counts as success alongside 0.
 
     Args:
         cfg (dict): Parsed YAML config.
@@ -177,36 +184,48 @@ def run_mlx_lora(
     checkpoint_dir.mkdir(parents=True, exist_ok=True)
     data_dir = _prepare_data_dir(train_jsonl, val_jsonl)
 
-    n_lines = sum(1 for _ in open(train_jsonl))
+    with open(train_jsonl) as handle:
+        n_lines = sum(1 for _ in handle)
     iters_per_epoch = max(n_lines // train_cfg["batch_size"], 1)
     max_iters = iters_per_epoch * train_cfg.get("max_epochs", 250)
 
     cmd = [
         "mlx_lm.lora",
-        "--model", model_cfg["mlx_id"],
+        "--model",
+        model_cfg["mlx_id"],
         "--train",
-        "--data", str(data_dir),
-        "--num-layers", str(lora_cfg["layers"]),
-        "--batch-size", str(train_cfg["batch_size"]),
-        "--grad-accumulation-steps", str(train_cfg["gradient_accumulation"]),
+        "--data",
+        str(data_dir),
+        "--num-layers",
+        str(lora_cfg["layers"]),
+        "--batch-size",
+        str(train_cfg["batch_size"]),
+        "--grad-accumulation-steps",
+        str(train_cfg["gradient_accumulation"]),
         "--grad-checkpoint",
-        "--learning-rate", str(train_cfg["learning_rate"]),
-        "--iters", "10" if debug else str(max_iters),
-        "--steps-per-report", str(train_cfg["logging_steps"]),
-        "--steps-per-eval", str(train_cfg["eval_steps"]),
-        "--save-every", str(train_cfg["save_steps"]),
-        "--adapter-path", str(checkpoint_dir),
-        "--max-seq-length", str(train_cfg["max_seq_len"]),
-        "--seed", "42",
+        "--learning-rate",
+        str(train_cfg["learning_rate"]),
+        "--iters",
+        "10" if debug else str(max_iters),
+        "--steps-per-report",
+        str(train_cfg["logging_steps"]),
+        "--steps-per-eval",
+        str(train_cfg["eval_steps"]),
+        "--save-every",
+        str(train_cfg["save_steps"]),
+        "--adapter-path",
+        str(checkpoint_dir),
+        "--max-seq-length",
+        str(train_cfg["max_seq_len"]),
+        "--seed",
+        "42",
     ]
     if val_jsonl and val_jsonl.exists():
         cmd += ["--val-batches", "50"]
 
     console.print(f"[blue]Running MLX LoRA:[/blue]\n  {' '.join(cmd)}\n")
 
-    # Matches mlx_lm.lora stdout: "Iter N: Train loss X.XX, It/sec Y.YY"
     _train_re = re.compile(r"Iter (\d+): Train loss ([\d.]+).*?It/sec ([\d.]+)")
-    # Matches mlx_lm.lora stdout: "Iter N: Val loss X.XX"
     _val_re = re.compile(r"Iter (\d+): Val loss ([\d.]+)")
     mlflow_client = mlflow.MlflowClient() if mlflow_run_id else None
 
@@ -221,9 +240,9 @@ def run_mlx_lora(
         cmd, stdout=subprocess.PIPE, stderr=subprocess.STDOUT, text=True, bufsize=1
     )
 
-    def _stream():
+    def _stream() -> None:
         nonlocal stopped_early
-        for line in proc.stdout:
+        for line in cast(IO[str], proc.stdout):
             console.print(line, end="")
             if not mlflow_client and not stopper:
                 continue
@@ -232,8 +251,12 @@ def run_mlx_lora(
             if m and mlflow_client:
                 step = int(m.group(1))
                 try:
-                    mlflow_client.log_metric(mlflow_run_id, "train_loss", float(m.group(2)), step=step)
-                    mlflow_client.log_metric(mlflow_run_id, "it_per_sec", float(m.group(3)), step=step)
+                    mlflow_client.log_metric(
+                        cast(str, mlflow_run_id), "train_loss", float(m.group(2)), step=step
+                    )
+                    mlflow_client.log_metric(
+                        cast(str, mlflow_run_id), "it_per_sec", float(m.group(3)), step=step
+                    )
                 except Exception:
                     pass
                 continue
@@ -243,10 +266,10 @@ def run_mlx_lora(
                 step = int(m.group(1))
                 val_loss = float(m.group(2))
                 if mlflow_client:
-                    try:
-                        mlflow_client.log_metric(mlflow_run_id, "val_loss", val_loss, step=step)
-                    except Exception:
-                        pass
+                    with contextlib.suppress(Exception):
+                        mlflow_client.log_metric(
+                            cast(str, mlflow_run_id), "val_loss", val_loss, step=step
+                        )
 
                 if not debug:
                     epoch = step // iters_per_epoch
@@ -259,26 +282,27 @@ def run_mlx_lora(
                         proc.terminate()
                         return
                     if stopper.improved:
-                        console.print(f"[green]New best val loss: {val_loss:.4f} at step {step}[/green]")
+                        console.print(
+                            f"[green]New best val loss: {val_loss:.4f} at step {step}[/green]"
+                        )
 
     t = threading.Thread(target=_stream, daemon=True)
     t.start()
     proc.wait()
     t.join()
 
-    # returncode -15 is SIGTERM from our own proc.terminate() — not an error
     if proc.returncode not in (0, -15):
         raise RuntimeError(f"mlx_lm.lora exited with code {proc.returncode}")
 
     if mlflow_client and stopped_early:
         try:
-            mlflow_client.log_param(mlflow_run_id, "early_stopped", "true")
-            mlflow_client.log_metric(mlflow_run_id, "best_val_loss", stopper.best)
+            mlflow_client.log_param(cast(str, mlflow_run_id), "early_stopped", "true")
+            mlflow_client.log_metric(cast(str, mlflow_run_id), "best_val_loss", stopper.best)
         except Exception:
             pass
 
 
-def _patch_adapter_config_for_vlm(checkpoint_dir: Path, cfg: dict) -> None:
+def _patch_adapter_config_for_vlm(checkpoint_dir: Path, cfg: dict[str, Any]) -> None:
     """Rewrite adapter_config.json so mlx_vlm can load it.
 
     mlx_lm.lora writes a verbose training config. mlx_vlm.apply_lora_layers
@@ -287,6 +311,7 @@ def _patch_adapter_config_for_vlm(checkpoint_dir: Path, cfg: dict) -> None:
     as mlx_lm_training_config.json.
     """
     import json
+
     for config_path in sorted(checkpoint_dir.glob("**/adapter_config.json")):
         with open(config_path) as f:
             full_cfg = json.load(f)
@@ -317,7 +342,9 @@ def main() -> None:
             "scripts/02_train_culture_models.sh handle the fallback automatically."
         )
 
-    parser = argparse.ArgumentParser(description="MLX LoRA fine-tuning for culture-mllm (WVS text only).")
+    parser = argparse.ArgumentParser(
+        description="MLX LoRA fine-tuning for culture-mllm (WVS text only)."
+    )
     parser.add_argument("--config", required=True, help="Path to model YAML config")
     parser.add_argument("--culture", required=True, help="Culture name (e.g. arabic)")
     parser.add_argument("--condition", choices=["cultural", "baseline"], default="cultural")
@@ -365,7 +392,9 @@ def main() -> None:
         run_id = None
 
     try:
-        run_mlx_lora(cfg, train_jsonl, val_jsonl, checkpoint_dir, debug=args.debug, mlflow_run_id=run_id)
+        run_mlx_lora(
+            cfg, train_jsonl, val_jsonl, checkpoint_dir, debug=args.debug, mlflow_run_id=run_id
+        )
     finally:
         if active and mlflow_client and run_id:
             try:
