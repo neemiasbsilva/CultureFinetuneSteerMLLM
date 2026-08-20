@@ -14,22 +14,33 @@ Key functions:
     cluster_order()                        — Ward hierarchical for heatmap ordering
 """
 
+from typing import cast
+
 import numpy as np
 import pandas as pd
-from scipy.spatial.distance import cdist
 from scipy.cluster.hierarchy import dendrogram, linkage
-from scipy.spatial.distance import squareform
+from scipy.spatial.distance import cdist, squareform
+
+
+def _require_single_condition(df: pd.DataFrame, operation: str) -> None:
+    """Prevent legacy matrix APIs from pooling distinct experiment arms."""
+    if "condition" in df.columns and df["condition"].dropna().nunique() > 1:
+        raise ValueError(
+            f"{operation} received multiple annotation conditions; filter to one "
+            "condition or compute one matrix per condition"
+        )
 
 
 def cosine_similarity_matrix(a: np.ndarray, b: np.ndarray) -> np.ndarray:
     """Pairwise cosine similarity between two embedding matrices."""
-    return 1.0 - cdist(a, b, metric="cosine")
+    return cast("np.ndarray", 1.0 - cdist(a, b, metric="cosine"))
 
 
 def compute_per_image_similarity(
     df: pd.DataFrame,
     embeddings: np.ndarray,
     group_col: str = "culture",
+    context_cols: list[str] | None = None,
 ) -> pd.DataFrame:
     """
     Per-image mean cosine similarity across all culture models.
@@ -39,21 +50,27 @@ def compute_per_image_similarity(
     df = df.copy()
     df["_emb_idx"] = np.arange(len(df))
 
+    if context_cols is None:
+        context_cols = ["condition"] if "condition" in df.columns else []
+    group_keys = [*context_cols, "image_id"]
     rows = []
-    for image_id, grp in df.groupby("image_id"):
-        idxs = grp["_emb_idx"].values
+    for keys, grp in df.groupby(group_keys):
+        key_values = keys if isinstance(keys, tuple) else (keys,)
+        metadata = dict(zip(group_keys, key_values, strict=True))
+        idxs = cast("np.ndarray", grp["_emb_idx"].values)
         if len(idxs) < 2:
             continue
         embs = embeddings[idxs]
         sim_matrix = cosine_similarity_matrix(embs, embs)
-        # Upper triangle (excluding diagonal)
         upper = sim_matrix[np.triu_indices(len(idxs), k=1)]
-        rows.append({
-            "image_id": image_id,
-            "sim_mean": float(np.mean(upper)),
-            "sim_std": float(np.std(upper)),
-            "n_annotations": len(idxs),
-        })
+        rows.append(
+            {
+                **metadata,
+                "sim_mean": float(np.mean(upper)),
+                "sim_std": float(np.std(upper)),
+                "n_annotations": len(idxs),
+            }
+        )
 
     return pd.DataFrame(rows)
 
@@ -72,34 +89,36 @@ def compute_within_cross_similarity(
     """
     df = df.copy()
     df["_emb_idx"] = np.arange(len(df))
-    groups = df[group_col].unique()
-
+    context_cols = ["condition"] if "condition" in df.columns else []
+    group_keys = [*context_cols, "image_id"]
     rows = []
-    for image_id, img_grp in df.groupby("image_id"):
-        idxs = img_grp["_emb_idx"].values
+    for keys, img_grp in df.groupby(group_keys):
+        key_values = keys if isinstance(keys, tuple) else (keys,)
+        metadata = dict(zip(group_keys, key_values, strict=True))
+        idxs = cast("np.ndarray", img_grp["_emb_idx"].values)
         embs = embeddings[idxs]
         img_grp = img_grp.reset_index(drop=True)
 
         within_sims, cross_sims = [], []
         for i in range(len(img_grp)):
             for j in range(i + 1, len(img_grp)):
-                sim = float(cosine_similarity_matrix(
-                    embs[i:i+1], embs[j:j+1]
-                )[0, 0])
+                sim = float(cosine_similarity_matrix(embs[i : i + 1], embs[j : j + 1])[0, 0])
                 if img_grp.iloc[i][group_col] == img_grp.iloc[j][group_col]:
                     within_sims.append(sim)
                 else:
                     cross_sims.append(sim)
 
-        rows.append({
-            "image_id": image_id,
-            "dimension": group_col,
-            "modality": modality,
-            "within_mean": float(np.mean(within_sims)) if within_sims else np.nan,
-            "cross_mean": float(np.mean(cross_sims)) if cross_sims else np.nan,
-            "n_within_pairs": len(within_sims),
-            "n_cross_pairs": len(cross_sims),
-        })
+        rows.append(
+            {
+                **metadata,
+                "dimension": group_col,
+                "modality": modality,
+                "within_mean": float(np.mean(within_sims)) if within_sims else np.nan,
+                "cross_mean": float(np.mean(cross_sims)) if cross_sims else np.nan,
+                "n_within_pairs": len(within_sims),
+                "n_cross_pairs": len(cross_sims),
+            }
+        )
 
     return pd.DataFrame(rows)
 
@@ -115,6 +134,7 @@ def compute_culture_sim_matrix(
 
     Mirrors the 24×24 profile similarity matrix from analyzing-persona-effects-mllm.
     """
+    _require_single_condition(df, "compute_culture_sim_matrix")
     groups = sorted(df[group_col].unique())
     df = df.copy()
     df["_emb_idx"] = np.arange(len(df))
@@ -128,9 +148,9 @@ def compute_culture_sim_matrix(
     matrix = np.zeros((n, n))
     for i, gi in enumerate(groups):
         for j, gj in enumerate(groups):
-            matrix[i, j] = float(cosine_similarity_matrix(
-                group_mean_embs[gi], group_mean_embs[gj]
-            )[0, 0])
+            matrix[i, j] = float(
+                cosine_similarity_matrix(group_mean_embs[gi], group_mean_embs[gj])[0, 0]
+            )
 
     return matrix, groups
 
@@ -147,6 +167,7 @@ def compute_image_conditioned_culture_sim(
 
     Returns (N×N matrix, list of group labels).
     """
+    _require_single_condition(df, "compute_image_conditioned_culture_sim")
     groups = sorted(df[group_col].unique())
     df = df.copy()
     df["_emb_idx"] = np.arange(len(df))
@@ -157,7 +178,7 @@ def compute_image_conditioned_culture_sim(
     accum = np.zeros((n, n))
     counts = np.zeros((n, n))
 
-    for image_id, img_grp in df.groupby("image_id"):
+    for _image_id, img_grp in df.groupby("image_id"):
         img_grp = img_grp.reset_index(drop=True)
         for grp in groups:
             grp_rows = img_grp[img_grp[group_col] == grp]
