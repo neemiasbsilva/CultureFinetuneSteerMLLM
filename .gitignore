@@ -1,98 +1,46 @@
-# Python
+# Python bytecode, build products, and tooling caches
 __pycache__/
 *.py[cod]
-*.pyo
-*.pyd
-*.so
-*.egg
 *.egg-info/
 dist/
 build/
-.eggs/
-
-# Virtual environments
 .venv/
-venv/
-env/
+.pytest_cache/
+.mypy_cache/
+.ruff_cache/
+.ipynb_checkpoints/
 
-# Environment variables
+# Secrets: only the template is shared
 .env
 !.env.example
 
-# Jupyter
-.ipynb_checkpoints/
-*.ipynb_checkpoints
-
-# ML artifacts
+# Experiment artifacts. The pipeline regenerates all of these, and the
+# checkpoint tree runs to hundreds of gigabytes.
 checkpoints/**
 !checkpoints/.gitkeep
 outputs/**
 !outputs/.gitkeep
-mlflow.db
-mlruns/**
-!mlruns/.gitkeep
-
-# Data
-data/raw/**
-!data/raw/.gitkeep
-data/processed/**
-!data/processed/.gitkeep
-data/folds/**
-!data/folds/.gitkeep
-*.csv
-*.parquet
-*.h5
-*.hdf5
-*.pkl
-*.pickle
-
-# Model weights
-*.bin
-*.pt
-*.pth
-*.safetensors
-*.gguf
-*.ggml
-
-# Logs
 logs/**
 !logs/.gitkeep
+mlruns/**
+!mlruns/.gitkeep
+mlflow.db*
 *.log
-wandb/
 
-# IDE
+# Corpora. data/ is a symlink to an external dataset root that is licensed
+# separately and never redistributed here.
+/data
+*.csv
+*.parquet
+
+# Model weights never belong in git
+*.safetensors
+*.gguf
+*.bin
+*.pt
+
+# Editors and OS
 .vscode/
 .idea/
-*.swp
-*.swo
-
-# macOS
-.DS_Store
-.AppleDouble
-
-# LaTeX
-*.aux
-*.bbl
-*.blg
-*.fdb_latexmk
-*.fls
-*.log
-*.out
-*.synctex.gz
-*.toc
-*.lof
-*.lot
-*.idx
-*.ilg
-*.ind
-*.nav
-*.snm
-*.vrb
-
-# Claude Code internal
 .claude/
-
-# Misc
-*.tmp
-*.temp
-*.zip
+.DS_Store
