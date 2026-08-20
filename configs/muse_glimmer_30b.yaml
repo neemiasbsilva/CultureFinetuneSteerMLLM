@@ -1,8 +1,8 @@
 model:
-  id: "Qwen/Qwen3-VL-8B-Thinking"
+  id: "meta-models/Muse-Glimmer-30B"
   backend: "hf"                  # auto-detects cuda > mps > cpu at runtime
   dtype: "bfloat16"
-  image_max_pixels: 200704       # 448×448
+  image_max_pixels: 200704       # 448×448 → 256 merged tokens at 14px patch / merge 2
 
 lora:
   r: 8
@@ -16,12 +16,12 @@ lora:
     - "o_proj"
 
 training:
-  batch_size: 2
-  gradient_accumulation: 8       # effective batch = 16
+  batch_size: 1
+  gradient_accumulation: 16      # effective batch = 16
   max_epochs: 250
-  learning_rate: 2.0e-4
+  learning_rate: 1.0e-4          # lower LR for larger model
   lr_schedule: "cosine"
-  warmup_steps: 50
+  warmup_steps: 100
   early_stopping_patience: 15
   early_stopping_min_epochs: 20
   max_seq_len: 512
@@ -29,18 +29,11 @@ training:
   eval_steps: 100
   save_steps: 100
   max_grad_norm: 0.3
-  gradient_checkpointing: true   # ~17.5 GB of bf16 weights resident on a 32 GB card
+  gradient_checkpointing: true
+  quantization: "4bit"           # QLoRA via bitsandbytes — 59.6 GB bf16 on a 32 GB card
 
 cultures:
-  - arabic
-  - bengali
-  - chinese
-  - english
   - german
-  - korean
-  - portuguese
-  - spanish
-  - turkish
 
 n_folds: 5
 
