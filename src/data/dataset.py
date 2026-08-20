@@ -4,18 +4,19 @@ PyTorch Dataset and HuggingFace Dataset helpers for CultureVLM training.
 Provides:
   - CultureVLMDataset: torch.utils.data.Dataset wrapping JSONL SFT examples
   - merge_wvs_and_visual: merge WVS text anchoring + visual examples into one split
-  - load_hf_dataset: returns a HuggingFace datasets.Dataset for trl.SFTTrainer
+  - load_hf_dataset: JSONL compatibility loader for WVS training
 """
 
 import json
 from pathlib import Path
+from typing import Any
 
-import torch
-from datasets import Dataset
+from datasets import Dataset, Sequence
+from datasets import Image as HFImage
 from torch.utils.data import Dataset as TorchDataset
 
 
-class CultureVLMDataset(TorchDataset):
+class CultureVLMDataset(TorchDataset[dict[str, Any]]):
     """
     Loads a JSONL file of chat-completion examples (with optional image paths).
     Each record has {"condition", "culture", "image_id", "messages": [...]}.
@@ -23,7 +24,7 @@ class CultureVLMDataset(TorchDataset):
 
     def __init__(self, jsonl_path: str | Path):
         self.path = Path(jsonl_path)
-        self.records: list[dict] = []
+        self.records: list[dict[str, Any]] = []
         with open(self.path) as f:
             for line in f:
                 line = line.strip()
@@ -33,7 +34,7 @@ class CultureVLMDataset(TorchDataset):
     def __len__(self) -> int:
         return len(self.records)
 
-    def __getitem__(self, idx: int) -> dict:
+    def __getitem__(self, idx: int) -> dict[str, Any]:
         return self.records[idx]
 
     def __repr__(self) -> str:
@@ -49,7 +50,7 @@ def merge_wvs_and_visual(
     Merge WVS cultural anchoring examples + visual urban sentiment examples.
     Returns total number of merged examples.
     """
-    records: list[dict] = []
+    records: list[dict[str, Any]] = []
 
     wvs_path = Path(wvs_jsonl)
     if wvs_path.exists():
@@ -83,7 +84,9 @@ def load_hf_dataset(jsonl_path: str | Path, text_field: str = "text") -> Dataset
     pre-formatted 'text' field.
 
     This function returns a Dataset with 'messages' column so that
-    SFTTrainer can apply the model's chat template automatically.
+    SFTTrainer can apply the model's chat template automatically. Records
+    carrying an 'images' key (visual SFT) keep it as a lazily decoded Image
+    column — paths are opened on the fly at collation time.
     """
     records = []
     with open(Path(jsonl_path)) as f:
@@ -91,5 +94,11 @@ def load_hf_dataset(jsonl_path: str | Path, text_field: str = "text") -> Dataset
             line = line.strip()
             if line:
                 obj = json.loads(line)
-                records.append({"messages": obj["messages"]})
-    return Dataset.from_list(records)
+                rec = {"messages": obj["messages"]}
+                if obj.get("images"):
+                    rec["images"] = obj["images"]
+                records.append(rec)
+    dataset = Dataset.from_list(records)
+    if "images" in dataset.column_names:
+        dataset = dataset.cast_column("images", Sequence(HFImage()))
+    return dataset
