@@ -6,6 +6,8 @@ we use a NEUTRAL system prompt for ALL culture models. The cultural bias
 is already encoded in the model weights through fine-tuning.
 """
 
+from typing import Any
+
 from src.annotation.config import ANNOTATION_SYSTEM_PROMPT, ANNOTATION_USER_PROMPT
 from src.annotation.state import CulturalAnnotationState
 
@@ -15,7 +17,7 @@ def assembler_node(state: CulturalAnnotationState) -> CulturalAnnotationState:
     return {**state, "system_prompt": ANNOTATION_SYSTEM_PROMPT}
 
 
-def build_messages(state: CulturalAnnotationState) -> list[dict]:
+def build_messages(state: CulturalAnnotationState) -> list[dict[str, Any]]:
     """
     Construct the multimodal message list for the VLM API call.
     Image is passed as base64 data URL.
