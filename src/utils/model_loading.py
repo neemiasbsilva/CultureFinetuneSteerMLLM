@@ -12,20 +12,46 @@ Strategies (config key `training.quantization`, falling back to
 
     None      immediate load at the declared dtype.
     "4bit"    QLoRA via bitsandbytes NF4 — for BF16 checkpoints too large to
-              hold whole (gemma4_31b, qwen3_27b).
+              hold whole (gemma4_31b, qwen3_27b, llama_guard4_12b).
 
 Pre-quantized checkpoints are refused outright: this repository trains only
 from unquantized releases.
+
+Modalities (config key `model.modality`, default `"vision_text"`) pick the
+`Auto*` class and the processor class together, because the two must agree:
+
+    "vision_text"   AutoModelForImageTextToText + AutoProcessor.
+    "text"          AutoModelForCausalLM + AutoTokenizer — for text-only bases
+                    such as llama3_2_3b, which the WVS track can still train
+                    because its supervision is text-only.
+
+The dangerous direction is `"text"` declared against a composite checkpoint:
+the text-only class drops the vision tower without a word, so it is refused
+here rather than discovered in the adapter. The reverse cannot be proven from
+config metadata alone — the composite families do not agree on where the vision
+section lives — and `from_pretrained` already refuses it loudly.
+
+A chat template is part of the same contract: WVS records are chat-format, so a
+base whose tokenizer carries no template cannot render them at all, and a base
+whose template was written for another purpose renders them into something the
+config does not describe. `model.chat_template` points at a Jinja file that
+replaces whatever the checkpoint ships, and training refuses to start when
+neither is present.
 """
 
 from __future__ import annotations
 
+from pathlib import Path
 from typing import Any
 
 import torch
 from transformers import AutoConfig
 
 QUANTIZATION_STRATEGIES: tuple[str | None, ...] = (None, "4bit")
+
+MODALITIES: tuple[str, ...] = ("vision_text", "text")
+
+DEFAULT_MODALITY = "vision_text"
 
 _DTYPES: dict[str, torch.dtype] = {
     "bfloat16": torch.bfloat16,
@@ -98,6 +124,109 @@ def resolve_dtype(model_cfg: dict[str, Any]) -> torch.dtype:
     return _DTYPES[declared]
 
 
+def resolve_modality(model_cfg: dict[str, Any]) -> str:
+    """Return the declared input modality.
+
+    Args:
+        model_cfg (dict): `model` section of the config.
+
+    Returns:
+        str: One of MODALITIES; DEFAULT_MODALITY when the key is omitted, which
+            keeps every config written before text-only bases existed valid.
+
+    Raises:
+        ModelConfigError: If the declared value is not a known modality.
+    """
+    declared = model_cfg.get("modality", DEFAULT_MODALITY)
+    if declared not in MODALITIES:
+        known = ", ".join(repr(m) for m in MODALITIES)
+        raise ModelConfigError(
+            f"Unknown modality {declared!r}. Expected one of: {known}, or omit the "
+            f"key for {DEFAULT_MODALITY!r}."
+        )
+    return str(declared)
+
+
+def auto_class_for_modality(modality: str) -> Any:
+    """Return the `Auto*` class that loads a checkpoint of this modality.
+
+    Args:
+        modality (str): A value from MODALITIES.
+
+    Returns:
+        Any: `AutoModelForCausalLM` for "text", `AutoModelForImageTextToText`
+            otherwise.
+
+    Raises:
+        ModelConfigError: If the modality is not a known one.
+    """
+    from transformers import AutoModelForCausalLM, AutoModelForImageTextToText
+
+    if modality == "text":
+        return AutoModelForCausalLM
+    if modality == "vision_text":
+        return AutoModelForImageTextToText
+    raise ModelConfigError(f"Unknown modality {modality!r}.")
+
+
+def _checkpoint_config(model_id: str) -> Any | None:
+    """Read a checkpoint's config metadata, or None when it cannot be read.
+
+    No weights are downloaded or allocated. A config that cannot be read at
+    all — offline, gated, or not yet downloaded — yields None, since validation
+    cannot speak to a checkpoint it cannot see.
+    """
+    try:
+        return AutoConfig.from_pretrained(model_id, trust_remote_code=True)
+    except Exception:
+        return None
+
+
+def checkpoint_is_composite(model_id: str) -> bool | None:
+    """Return whether a checkpoint carries a vision section, or None if unreadable.
+
+    Args:
+        model_id (str): HF repo id or local path.
+
+    Returns:
+        bool | None: True when the config declares a vision sub-config, False
+            when it does not, None when the config cannot be read.
+    """
+    config = _checkpoint_config(model_id)
+    if config is None:
+        return None
+    return getattr(config, "vision_config", None) is not None
+
+
+def validate_modality(model_id: str, model_cfg: dict[str, Any]) -> str:
+    """Fail before loading if the declared modality would silently drop weights.
+
+    Only the `"text"`-against-a-composite-checkpoint direction is refused: it is
+    the one that loads successfully while leaving the vision tower behind. The
+    reverse is left to `from_pretrained`, which refuses a text-only checkpoint
+    under the composite class by name.
+
+    Args:
+        model_id (str): HF repo id or local path.
+        model_cfg (dict): `model` section of the config.
+
+    Returns:
+        str: The validated modality.
+
+    Raises:
+        ModelConfigError: If the declared modality contradicts the checkpoint.
+    """
+    modality = resolve_modality(model_cfg)
+    if modality == "text" and checkpoint_is_composite(model_id) is True:
+        raise ModelConfigError(
+            f"'{model_id}' carries a vision_config, so modality: \"text\" would load "
+            "its language path alone and train an adapter against a model that is "
+            'not the released one. Declare modality: "vision_text", or point '
+            "`model.id` at a text-only release."
+        )
+    return modality
+
+
 def checkpoint_quant_method(model_id: str) -> str | None:
     """Return the `quant_method` baked into a checkpoint, if it is pre-quantized.
 
@@ -111,9 +240,8 @@ def checkpoint_quant_method(model_id: str) -> str | None:
     Returns:
         str | None: e.g. "fp8", or None for an unquantized checkpoint.
     """
-    try:
-        config = AutoConfig.from_pretrained(model_id, trust_remote_code=True)
-    except Exception:
+    config = _checkpoint_config(model_id)
+    if config is None:
         return None
     embedded = getattr(config, "quantization_config", None)
     if not embedded:
@@ -156,6 +284,98 @@ def validate_base_model_config(
         "that lives alongside the weights. This repository trains only from "
         "unquantized checkpoints — point `model.id` at a BF16 release, with "
         'quantization: "4bit" if the full weights do not fit.'
+    )
+
+
+def load_processor(model_id: str, modality: str, *, trust_remote_code: bool = True) -> Any:
+    """Load the text/image front-end that matches the modality.
+
+    A text-only checkpoint has no `AutoProcessor` to load — asking for one
+    raises or, worse, hands back a bare tokenizer wearing a processor's name.
+
+    Args:
+        model_id (str): HF repo id or local path.
+        modality (str): A value from MODALITIES.
+        trust_remote_code (bool): Passed through to `from_pretrained`.
+
+    Returns:
+        Any: An `AutoProcessor` for "vision_text", an `AutoTokenizer` for "text".
+    """
+    from transformers import AutoProcessor, AutoTokenizer
+
+    if modality == "text":
+        return AutoTokenizer.from_pretrained(model_id, trust_remote_code=trust_remote_code)
+    return AutoProcessor.from_pretrained(  # type: ignore[no-untyped-call]
+        model_id, trust_remote_code=trust_remote_code
+    )
+
+
+def processor_tokenizer(processor: Any) -> Any:
+    """Return the tokenizer inside a processor, or the tokenizer itself.
+
+    Args:
+        processor (Any): An `AutoProcessor` or an `AutoTokenizer`.
+
+    Returns:
+        Any: The tokenizer that owns the vocabulary and the chat template.
+    """
+    return getattr(processor, "tokenizer", processor)
+
+
+def apply_chat_template_file(processor: Any, template_path: str | Path) -> str:
+    """Replace the checkpoint's chat template with the one named by the config.
+
+    Set on both the processor and its tokenizer: the trainer renders through
+    whichever of the two it was handed, and a template on only one of them
+    means the rendered text depends on that choice.
+
+    Args:
+        processor (Any): An `AutoProcessor` or an `AutoTokenizer`.
+        template_path (str | Path): Jinja file, relative to the repository root.
+
+    Returns:
+        str: The template source that was applied.
+
+    Raises:
+        ModelConfigError: If the file does not exist or is empty.
+    """
+    path = Path(template_path)
+    if not path.is_file():
+        raise ModelConfigError(
+            f"model.chat_template points at {path}, which does not exist. Paths are "
+            "resolved from the repository root."
+        )
+    template = path.read_text()
+    if not template.strip():
+        raise ModelConfigError(f"model.chat_template at {path} is empty.")
+    tokenizer = processor_tokenizer(processor)
+    tokenizer.chat_template = template
+    if processor is not tokenizer:
+        processor.chat_template = template
+    return template
+
+
+def require_chat_template(processor: Any, model_id: str) -> None:
+    """Refuse to train a chat-format dataset through a base that cannot render it.
+
+    Base (non-instruct) releases frequently ship no template at all, and the
+    failure without this check arrives deep inside the collator, after the
+    weights are already resident.
+
+    Args:
+        processor (Any): An `AutoProcessor` or an `AutoTokenizer`.
+        model_id (str): HF repo id or local path, for the message.
+
+    Raises:
+        ModelConfigError: If neither the processor nor its tokenizer has one.
+    """
+    tokenizer = processor_tokenizer(processor)
+    if getattr(tokenizer, "chat_template", None) or getattr(processor, "chat_template", None):
+        return
+    raise ModelConfigError(
+        f"'{model_id}' ships no chat template, so the WVS chat records cannot be "
+        "rendered into training text. Point `model.chat_template` at a Jinja file "
+        "(see configs/templates/), or use an instruction-tuned release of this base."
     )
 
 
