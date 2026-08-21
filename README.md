@@ -22,15 +22,14 @@ whether the steering effects found in two prior prompting-only studies —
 which reported descriptive convergence alongside interpretive variation, and
 [persona validity in urban sentiment perception](https://minds-lab-utfpr.github.io/MLLMs-persona-evaluation/),
 which found persona-driven variation to be largely superficial — still hold
-when culture is instantiated as trained adapter weights instead of a prompt
+when culture is fine-tuned into the weights instead of named in a prompt
 instruction.
 
-Do culture-specific adapters change how a multimodal model perceives an urban
-scene? Each architecture is fine-tuned into nine culture-specific LoRA adapters
-from World Values Survey question-answer text, then annotates the same σ₃P₅
-image set under a neutral prompt, so any shift in sentiment, caption or
-perception tags is attributable to the adapter weights rather than to persona
-instructions in the prompt.
+Do fine-tuned cultures change how a multimodal model perceives an urban scene?
+Each architecture is LoRA fine-tuned into nine cultures from World Values Survey
+question-answer text, then annotates the same σ₃P₅ image set under a neutral
+prompt, so any shift in sentiment, caption or perception tags is attributable to
+the fine-tuned culture rather than to persona instructions in the prompt.
 
 ```text
 ├── configs/                     one YAML per architecture: model id, LoRA, quantization
@@ -38,7 +37,6 @@ instructions in the prompt.
 │   ├── qwen3_5_2b.yaml  qwen3_vl_2b.yaml  qwen3_vl_8b.yaml  qwen3_27b.yaml
 │   ├── muse_glimmer_30b.yaml    QLoRA, transformers 5.15 architecture
 │   ├── llama3_2_3b.yaml         text-only base, pinned chat template
-│   ├── llama_guard4_12b.yaml    QLoRA, gated safety-classifier base
 │   ├── phi4.yaml
 │   └── templates/               chat templates for bases that ship none
 │
@@ -66,7 +64,7 @@ instructions in the prompt.
 ├── notebooks/                   01..05 exploratory analysis over annotation outputs
 ├── tests/                       conftest.py + unit/
 ├── data/                        gitignored   symlink to the dataset root
-├── checkpoints/                 gitignored   <culture>/<model>/cultural/ adapters
+├── checkpoints/                 gitignored   fine-tuned cultures in <culture>/<model>/cultural/
 └── outputs/                     gitignored   annotations/ and evaluation/
 ```
 
@@ -89,7 +87,7 @@ Four stages, run in this order:
 | # | Stage | Command | Needs |
 | --- | --- | --- | --- |
 | 1 | **Data** — folds and WVS fine-tuning text | `./scripts/01_prepare_data.sh` | the σ₃P₅ agreement CSV and WVS data |
-| 2 | **Training** — one LoRA adapter per culture | `./scripts/02_train_culture_models.sh` | a CUDA GPU (or Apple Silicon) |
+| 2 | **Training** — nine fine-tuned cultures per architecture | `./scripts/02_train_culture_models.sh` | a CUDA GPU (or Apple Silicon) |
 | 3 | **Annotation** — matched base and WVS passes | `./scripts/03_run_annotation.sh` | stage 2 checkpoints, the image set |
 | 4 | **Evaluation** — metrics and significance | `./scripts/04_evaluate.sh` | stage 3 annotations |
 
@@ -124,7 +122,7 @@ placed next to them works unchanged:
 
 Stage 1 builds the stratified evaluation folds and the WVS fine-tuning text.
 Fine-tuning is text-only: images enter the experiment at annotation time, so no
-visual supervision can leak into the adapters.
+visual supervision can leak into the fine-tuned cultures.
 
 ```bash
 ./scripts/01_prepare_data.sh          # 5 folds, seed 42
@@ -140,11 +138,11 @@ FOLDS=10 SEED=7 ./scripts/01_prepare_data.sh
 
 ## 2 — Training
 
-One LoRA adapter per (architecture, culture), trained on WVS text under a
-culture-specific system prompt. The run is resumable: a finished combination is
-skipped via its `TRAINING_DONE` sentinel, an interrupted one resumes from the
-last checkpoint, and the base model must beat uniform guessing on a real batch
-before the first optimizer step.
+One fine-tuned culture per (architecture, culture) pair, trained with LoRA on
+WVS text under a culture-specific system prompt. The run is resumable: a
+finished combination is skipped via its `TRAINING_DONE` sentinel, an interrupted
+one resumes from the last checkpoint, and the base model must beat uniform
+guessing on a real batch before the first optimizer step.
 
 ```bash
 ./scripts/02_train_culture_models.sh                          # every model × culture
@@ -152,9 +150,7 @@ MODELS="gemma4_e2b" CULTURES="arabic german" ./scripts/02_train_culture_models.s
 ```
 
 `MODELS` is the run list; `configs/` is the registry. Architectures added for one
-culture — `muse_glimmer_30b`, `qwen3_vl_2b`, `llama3_2_3b`, `llama_guard4_12b`, all
-German — are named explicitly rather than added to the default sweep. See
-[EXPERIMENTS.md](EXPERIMENTS.md) for what each one is there to isolate.
+culture — `muse_glimmer_30b`, `qwen3_vl_2b`, `llama3_2_3b`, all German — are named explicitly rather than added to the default sweep.
 
 Three `model` keys decide how a base is loaded, and all three are validated
 against the checkpoint's own metadata before any weights are read:
@@ -170,7 +166,7 @@ has no vision path, so it never enters stage 3.
 
 | Artifact | Contents |
 | --- | --- |
-| `checkpoints/<culture>/<model>/cultural/` | the adapter weights |
+| `checkpoints/<culture>/<model>/cultural/` | the fine-tuned culture's weights |
 | `checkpoints/<culture>/<model>/cultural/TRAINING_DONE` | completion sentinel |
 
 ---
@@ -227,8 +223,8 @@ similarity, topic and convergence analysis.
 
 | Condition | Weights | Checkpoint directory |
 | --- | --- | --- |
-| `inference_only` | raw base model, no adapter | — |
-| `wvs_cultural` | culture-specific WVS adapter | `<culture>/<model>/cultural/` |
+| `inference_only` | raw base model, no fine-tuned culture | — |
+| `wvs_cultural` | the culture's WVS fine-tuned weights | `<culture>/<model>/cultural/` |
 
 `cultural` is accepted as a legacy alias for `wvs_cultural` so existing runs
 resume without producing a second logical condition.
@@ -244,9 +240,9 @@ resume without producing a second logical condition.
 ```
 
 The tests pin the invariants that fail silently: the condition registry and its
-checkpoint layout, the refusal to fall back to a raw model when an adapter is
-missing, the matched-seed gate, the mode tie-break, Holm monotonicity, and the
-corrected resampled *t* statistic. Lint runs over tracked files only.
+checkpoint layout, the refusal to fall back to a raw model when a fine-tuned
+culture is missing, the matched-seed gate, the mode tie-break, Holm monotonicity,
+and the corrected resampled *t* statistic. Lint runs over tracked files only.
 
 <details>
 <summary><b>Troubleshooting</b></summary>
@@ -259,7 +255,8 @@ model's config for QLoRA, or lower `training.batch_size` and raise
 repository in `HF_TOKEN`, then re-run; stage 2 resumes from the last checkpoint.
 
 **Annotation refuses to start with `Missing adapter`.** The condition asked for a
-trained adapter that is not on disk. Run stage 2 for that culture and model, or
+fine-tuned culture that is not on disk; the error text keeps the internal
+`adapter` wording. Run stage 2 for that culture and model, or
 annotate with `CONDITIONS="inference_only"`. This is deliberate: a trained
 condition never silently falls back to the raw base model.
 

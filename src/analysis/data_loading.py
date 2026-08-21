@@ -38,7 +38,6 @@ MODEL_NAMES = [
     "qwen3_vl_8b",
     "qwen3_27b",
     "muse_glimmer_30b",
-    "llama_guard4_12b",
 ]
 
 SENTIMENT_INT_TO_LABEL = {

@@ -12,7 +12,7 @@ Strategies (config key `training.quantization`, falling back to
 
     None      immediate load at the declared dtype.
     "4bit"    QLoRA via bitsandbytes NF4 — for BF16 checkpoints too large to
-              hold whole (gemma4_31b, qwen3_27b, llama_guard4_12b).
+              hold whole (gemma4_31b, qwen3_27b).
 
 Pre-quantized checkpoints are refused outright: this repository trains only
 from unquantized releases.
@@ -353,6 +353,31 @@ def apply_chat_template_file(processor: Any, template_path: str | Path) -> str:
     if processor is not tokenizer:
         processor.chat_template = template
     return template
+
+
+def configured_chat_template(model_name: str, config_dir: str | Path = "configs") -> Path | None:
+    """Look up the template a model's training config installs, if it declares one.
+
+    Annotation loads its processor from the hub id rather than from the training
+    config, so without this the two paths render the same records differently and
+    an adapter is scored under a template it was never fitted under.
+
+    Args:
+        model_name (str): Registered model name, matching its config file stem.
+        config_dir (str | Path): Directory holding the training configs.
+
+    Returns:
+        Path | None: The declared template path, or None if the config declares
+            none or does not exist.
+    """
+    import yaml
+
+    config_path = Path(config_dir) / f"{model_name}.yaml"
+    if not config_path.is_file():
+        return None
+    config = yaml.safe_load(config_path.read_text()) or {}
+    template = (config.get("model") or {}).get("chat_template")
+    return Path(template) if template else None
 
 
 def require_chat_template(processor: Any, model_id: str) -> None:

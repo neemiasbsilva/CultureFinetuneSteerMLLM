@@ -114,7 +114,6 @@ class AnnotatorSettings:
             "qwen3_vl_8b": "Qwen/Qwen3-VL-8B-Thinking",
             "qwen3_27b": "Qwen/Qwen3.6-27B",
             "muse_glimmer_30b": "meta-models/Muse-Glimmer-30B",
-            "llama_guard4_12b": "meta-llama/Llama-Guard-4-12B",
         }
     )
 

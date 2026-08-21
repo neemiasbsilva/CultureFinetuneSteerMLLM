@@ -21,7 +21,7 @@ from src.utils.model_loading import resolve_dtype, resolve_modality, resolve_qua
 
 CONFIG_DIR = Path("configs")
 WVS_CONFIGS = sorted(p for p in CONFIG_DIR.glob("*.yaml") if not p.stem.endswith("_yfcc"))
-GERMAN_ONLY_MODELS = ("qwen3_vl_2b", "llama3_2_3b", "llama_guard4_12b")
+GERMAN_ONLY_MODELS = ("qwen3_vl_2b", "llama3_2_3b")
 
 
 def _load(path: Path) -> dict[str, Any]:
@@ -91,7 +91,6 @@ def test_the_new_architectures_are_scoped_to_german(model_key: str) -> None:
     [
         ("qwen3_vl_2b", "Qwen/Qwen3-VL-2B-Thinking", "vision_text"),
         ("llama3_2_3b", "meta-llama/Llama-3.2-3B", "text"),
-        ("llama_guard4_12b", "meta-llama/Llama-Guard-4-12B", "vision_text"),
     ],
 )
 def test_each_new_config_names_the_release_it_was_written_for(
@@ -101,17 +100,6 @@ def test_each_new_config_names_the_release_it_was_written_for(
     assert cfg["model"]["id"] == expected_id
     assert resolve_modality(cfg["model"]) == expected_modality
     assert get_model_key(cfg, CONFIG_DIR / f"{model_key}.yaml") == model_key
-
-
-def test_the_twelve_billion_guard_model_is_quantized_for_a_shared_card() -> None:
-    cfg = _load(CONFIG_DIR / "llama_guard4_12b.yaml")
-    assert resolve_quantization(cfg["model"], cfg["training"]) == "4bit"
-    assert cfg["training"]["gradient_checkpointing"] is True
-
-
-def test_the_llama_four_tower_is_excluded_by_the_name_it_actually_carries() -> None:
-    cfg = _load(CONFIG_DIR / "llama_guard4_12b.yaml")
-    assert "vision_model" in cfg["lora"]["exclude_modules"]
 
 
 @pytest.mark.parametrize("model_key", ["qwen3_vl_2b", "llama3_2_3b"])

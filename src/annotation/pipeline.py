@@ -8,8 +8,8 @@ variance can be analyzed.
 
 ``MODEL_NAMES`` spans the original Mac/MLX models (qwen3_5_2b, phi4, gemma4_e2b)
 and the HF-backend models: Gemma-4 (gemma4_e4b, gemma4_31b), Qwen3-VL / Qwen3
-(qwen3_vl_2b, qwen3_vl_8b, qwen3_27b), Muse Glimmer (muse_glimmer_30b, QLoRA)
-and Llama Guard 4 (llama_guard4_12b, QLoRA).  It is a registry, not a run list:
+(qwen3_vl_2b, qwen3_vl_8b, qwen3_27b) and Muse Glimmer (muse_glimmer_30b,
+QLoRA).  It is a registry, not a run list:
 ``03_run_annotation.sh`` names the models a given experiment actually annotates
 with.  The text-only ``llama3_2_3b`` is deliberately absent — it is trained on
 the WVS track but has no vision path to annotate through.
@@ -106,7 +106,6 @@ MODEL_NAMES = [
     "qwen3_vl_8b",
     "qwen3_27b",
     "muse_glimmer_30b",
-    "llama_guard4_12b",
 ]
 SHARED_EXPERIMENT_MODELS = [
     "gemma4_e2b",
