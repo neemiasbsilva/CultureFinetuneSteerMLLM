@@ -315,10 +315,12 @@ def _build_messages(
         ]
 
 
-_HF_MODEL_CACHE: dict[tuple[str, str | None], tuple[Any, Any, str]] = {}
+_HF_MODEL_CACHE: dict[tuple[str, str, str | None], tuple[Any, Any, str]] = {}
 
 
-def _load_hf_model(model_id: str, adapter_path: Path | None) -> tuple[Any, Any, str]:
+def _load_hf_model(
+    model_name: str, model_id: str, adapter_path: Path | None
+) -> tuple[Any, Any, str]:
     """Load (and cache) the HF processor/model for this (model_id, adapter_path) pair.
 
     A pipeline invocation runs thousands of images/runs against the same
@@ -329,7 +331,7 @@ def _load_hf_model(model_id: str, adapter_path: Path | None) -> tuple[Any, Any, 
     The base model is built with the same loader as training, so an adapter is always
     evaluated on the base it was fitted to.
     """
-    cache_key = (model_id, str(adapter_path) if adapter_path else None)
+    cache_key = (model_name, model_id, str(adapter_path) if adapter_path else None)
     cached = _HF_MODEL_CACHE.get(cache_key)
     if cached is not None:
         return cached
@@ -339,13 +341,20 @@ def _load_hf_model(model_id: str, adapter_path: Path | None) -> tuple[Any, Any, 
     from transformers import AutoModelForImageTextToText, AutoProcessor
 
     from src.utils.device import get_device
-    from src.utils.model_loading import build_base_model
+    from src.utils.model_loading import (
+        apply_chat_template_file,
+        build_base_model,
+        configured_chat_template,
+    )
 
     device = get_device()
 
     processor = AutoProcessor.from_pretrained(  # type: ignore[no-untyped-call]
         model_id, trust_remote_code=True
     )
+    template_path = configured_chat_template(model_name)
+    if template_path is not None:
+        apply_chat_template_file(processor, template_path)
     model = build_base_model(
         model_id,
         auto_class=AutoModelForImageTextToText,
@@ -386,7 +395,7 @@ def _run_hf_generate(
     import torch
     from PIL import Image
 
-    processor, model, device = _load_hf_model(model_id, adapter_path)
+    processor, model, device = _load_hf_model(model_name, model_id, adapter_path)
 
     image = Image.open(image_path).convert("RGB")
     messages = _build_messages(model_name, image, system_prompt, user_prompt)

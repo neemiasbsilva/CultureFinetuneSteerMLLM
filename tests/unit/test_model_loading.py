@@ -28,6 +28,7 @@ from src.utils.model_loading import (
     build_base_model,
     checkpoint_is_composite,
     checkpoint_quant_method,
+    configured_chat_template,
     processor_tokenizer,
     require_chat_template,
     resolve_dtype,
@@ -555,6 +556,28 @@ def test_a_configured_template_lands_on_a_bare_tokenizer(tmp_path: Path) -> None
     apply_chat_template_file(tokenizer, path)
 
     assert tokenizer.chat_template == "{{ messages[0]['content'] }}"
+
+
+def test_a_configs_declared_template_is_resolvable_by_model_name(tmp_path: Path) -> None:
+    (tmp_path / "some_model.yaml").write_text(
+        'model:\n  id: "org/base"\n  chat_template: "configs/templates/some.jinja"\n'
+    )
+
+    assert configured_chat_template("some_model", tmp_path) == Path("configs/templates/some.jinja")
+
+
+@pytest.mark.parametrize(
+    "body",
+    ['model:\n  id: "org/base"\n', "model:\n", "{}\n"],
+)
+def test_a_model_declaring_no_template_resolves_to_none(tmp_path: Path, body: str) -> None:
+    (tmp_path / "some_model.yaml").write_text(body)
+
+    assert configured_chat_template("some_model", tmp_path) is None
+
+
+def test_an_unregistered_model_resolves_to_none_rather_than_raising(tmp_path: Path) -> None:
+    assert configured_chat_template("absent_model", tmp_path) is None
 
 
 def test_a_missing_template_file_is_refused_before_any_rendering(tmp_path: Path) -> None:
