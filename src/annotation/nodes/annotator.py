@@ -260,9 +260,11 @@ def _build_messages(
 ) -> list[dict[str, Any]]:
     """Build HF chat messages in the format expected by each model family.
 
-    Qwen3-VL takes a structured content list holding the image dict; Gemma-4 takes an
-    inline image placeholder and no system role; Phi-4 and the legacy models take an
-    image token inside the content string.
+    Qwen3-VL takes a structured content list holding the image dict; Llama-4 takes the
+    same list with a bare image placeholder, since its template reads the image from the
+    processor call rather than from the message; Gemma-4 takes an inline image
+    placeholder and no system role; Phi-4 and the legacy models take an image token
+    inside the content string.
 
     Args:
         model_name: Registered model name whose family selects the message layout.
@@ -281,6 +283,17 @@ def _build_messages(
                 "role": "user",
                 "content": [
                     {"type": "image", "image": image},
+                    {"type": "text", "text": user_prompt},
+                ],
+            },
+        ]
+    elif model_name.startswith("llama"):
+        return [
+            {"role": "system", "content": system_prompt},
+            {
+                "role": "user",
+                "content": [
+                    {"type": "image"},
                     {"type": "text", "text": user_prompt},
                 ],
             },

@@ -34,9 +34,11 @@ MODEL_NAMES = [
     "gemma4_e2b",
     "gemma4_e4b",
     "gemma4_31b",
+    "qwen3_vl_2b",
     "qwen3_vl_8b",
     "qwen3_27b",
     "muse_glimmer_30b",
+    "llama_guard4_12b",
 ]
 
 SENTIMENT_INT_TO_LABEL = {

@@ -79,7 +79,10 @@ class AnnotatorSettings:
             only, matching how its checkpoints were actually produced.
         hf_model_id_map: HF model IDs, used directly for HF-backend models and as the fallback
             for mlx-backend models (``qwen3_5_2b``, ``gemma4_e2b``) on machines without
-            mlx_vlm (e.g. CUDA), mirroring ``02_train_culture_models.sh``.
+            mlx_vlm (e.g. CUDA), mirroring ``02_train_culture_models.sh``.  Only models
+            that can read an image belong here: ``llama3_2_3b`` trains on the text-only
+            WVS track but has no vision path, so annotating with it would score a
+            caption it never saw the image for.
     """
 
     max_concurrent: int = field(
@@ -107,9 +110,11 @@ class AnnotatorSettings:
             "phi4": "microsoft/Phi-4-multimodal-instruct",
             "gemma4_e4b": "google/gemma-4-E4B-it",
             "gemma4_31b": "google/gemma-4-31B-it",
+            "qwen3_vl_2b": "Qwen/Qwen3-VL-2B-Thinking",
             "qwen3_vl_8b": "Qwen/Qwen3-VL-8B-Thinking",
             "qwen3_27b": "Qwen/Qwen3.6-27B",
             "muse_glimmer_30b": "meta-models/Muse-Glimmer-30B",
+            "llama_guard4_12b": "meta-llama/Llama-Guard-4-12B",
         }
     )
 
