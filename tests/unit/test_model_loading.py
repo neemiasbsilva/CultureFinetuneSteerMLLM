@@ -4,26 +4,37 @@ Every adapter in the paper is trained on top of whatever `build_base_model`
 handed back, and the ways this goes wrong are all silent: a `dtype` that reads
 as declared but resolves against absent checkpoint metadata, a pre-quantized
 release loaded as if it were BF16, a `None` quantization config that overwrites
-the checkpoint's own, or a `device_map` that shards a model the trainer assumed
-was on one visible device.  None of those raise — they just train something
-other than what the config describes, so they are asserted here instead.
+the checkpoint's own, a `device_map` that shards a model the trainer assumed
+was on one visible device, or a text-only `Auto*` class that loads a composite
+checkpoint's language path and leaves the tower behind.  None of those raise —
+they just train something other than what the config describes, so they are
+asserted here instead.
 """
 
 from __future__ import annotations
 
+from pathlib import Path
 from typing import Any
 
 import pytest
 import torch
 
 from src.utils.model_loading import (
+    MODALITIES,
     QUANTIZATION_STRATEGIES,
     ModelConfigError,
+    apply_chat_template_file,
+    auto_class_for_modality,
     build_base_model,
+    checkpoint_is_composite,
     checkpoint_quant_method,
+    processor_tokenizer,
+    require_chat_template,
     resolve_dtype,
+    resolve_modality,
     resolve_quantization,
     validate_base_model_config,
+    validate_modality,
 )
 
 
@@ -72,6 +83,27 @@ class _FakeCheckpointConfig:
 
 class _ConfigWithoutQuantizationSection:
     pass
+
+
+class _CompositeCheckpointConfig:
+    def __init__(self) -> None:
+        self.vision_config = {"hidden_size": 1024}
+
+
+class _TextOnlyCheckpointConfig:
+    def __init__(self) -> None:
+        self.vision_config = None
+
+
+class _FakeTokenizer:
+    def __init__(self, chat_template: str | None = None) -> None:
+        self.chat_template = chat_template
+
+
+class _FakeProcessor:
+    def __init__(self, chat_template: str | None = None) -> None:
+        self.chat_template = chat_template
+        self.tokenizer = _FakeTokenizer(chat_template)
 
 
 class _FakeAutoConfig:
@@ -381,3 +413,174 @@ def test_trust_remote_code_reaches_from_pretrained_on_both_load_paths(
         trust_remote_code=False,
     )
     assert auto_class.last_kwargs["trust_remote_code"] is False
+
+
+def test_omitted_modality_keeps_every_pre_existing_config_composite() -> None:
+    assert resolve_modality({}) == "vision_text"
+    assert resolve_modality({"dtype": "bfloat16"}) == "vision_text"
+
+
+@pytest.mark.parametrize("declared", ["vision_text", "text"])
+def test_declared_modality_survives_resolution_unchanged(declared: str) -> None:
+    assert resolve_modality({"modality": declared}) == declared
+
+
+@pytest.mark.parametrize("declared", ["multimodal", "vision", "TEXT", "text_only", ""])
+def test_unknown_modality_is_refused_and_names_what_is_accepted(declared: str) -> None:
+    with pytest.raises(ModelConfigError, match=f"Unknown modality {declared!r}"):
+        resolve_modality({"modality": declared})
+    with pytest.raises(ModelConfigError, match="'vision_text', 'text'"):
+        resolve_modality({"modality": declared})
+
+
+def test_only_composite_and_text_only_are_advertised_as_supported_modalities() -> None:
+    assert MODALITIES == ("vision_text", "text")
+
+
+def test_each_modality_maps_onto_the_auto_class_that_can_load_it() -> None:
+    from transformers import AutoModelForCausalLM, AutoModelForImageTextToText
+
+    assert auto_class_for_modality("vision_text") is AutoModelForImageTextToText
+    assert auto_class_for_modality("text") is AutoModelForCausalLM
+
+
+def test_unknown_modality_never_reaches_an_auto_class() -> None:
+    with pytest.raises(ModelConfigError, match="Unknown modality 'audio'"):
+        auto_class_for_modality("audio")
+
+
+@pytest.mark.parametrize(
+    ("config", "expected"),
+    [
+        (_CompositeCheckpointConfig(), True),
+        (_TextOnlyCheckpointConfig(), False),
+        (_ConfigWithoutQuantizationSection(), False),
+    ],
+)
+def test_vision_section_is_read_from_config_metadata_only(
+    monkeypatch: pytest.MonkeyPatch, config: Any, expected: bool
+) -> None:
+    fake = _FakeAutoConfig(config)
+    monkeypatch.setattr("src.utils.model_loading.AutoConfig", fake)
+    assert checkpoint_is_composite("org/base") is expected
+    assert fake.calls == [{"trust_remote_code": True}]
+
+
+def test_unreadable_checkpoint_config_reports_unknown_rather_than_text_only(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.setattr(
+        "src.utils.model_loading.AutoConfig",
+        _FakeAutoConfig(error=OSError("gated: org/base needs HF_TOKEN")),
+    )
+    assert checkpoint_is_composite("org/base") is None
+
+
+def test_text_modality_against_a_composite_checkpoint_is_refused(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.setattr(
+        "src.utils.model_loading.AutoConfig", _FakeAutoConfig(_CompositeCheckpointConfig())
+    )
+    with pytest.raises(ModelConfigError, match="carries a vision_config"):
+        validate_modality("org/composite", {"modality": "text"})
+
+
+@pytest.mark.parametrize(
+    "config",
+    [_TextOnlyCheckpointConfig(), _ConfigWithoutQuantizationSection()],
+)
+def test_text_modality_against_a_text_only_checkpoint_is_allowed(
+    monkeypatch: pytest.MonkeyPatch, config: Any
+) -> None:
+    monkeypatch.setattr("src.utils.model_loading.AutoConfig", _FakeAutoConfig(config))
+    assert validate_modality("org/text-only", {"modality": "text"}) == "text"
+
+
+def test_a_gated_checkpoint_cannot_veto_a_modality_it_never_disclosed(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.setattr(
+        "src.utils.model_loading.AutoConfig",
+        _FakeAutoConfig(error=OSError("gated: meta-llama/Llama-3.2-3B needs HF_TOKEN")),
+    )
+    assert validate_modality("meta-llama/Llama-3.2-3B", {"modality": "text"}) == "text"
+
+
+def test_composite_modality_is_left_for_from_pretrained_to_refuse_by_name(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.setattr(
+        "src.utils.model_loading.AutoConfig", _FakeAutoConfig(_TextOnlyCheckpointConfig())
+    )
+    assert validate_modality("org/text-only", {}) == "vision_text"
+
+
+def test_unknown_modality_is_refused_before_the_checkpoint_is_ever_inspected(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    fake = _FakeAutoConfig(_CompositeCheckpointConfig())
+    monkeypatch.setattr("src.utils.model_loading.AutoConfig", fake)
+    with pytest.raises(ModelConfigError, match="Unknown modality"):
+        validate_modality("org/composite", {"modality": "vision"})
+    assert fake.inspected == []
+
+
+def test_the_tokenizer_is_found_inside_a_processor_and_on_its_own() -> None:
+    processor = _FakeProcessor()
+    assert processor_tokenizer(processor) is processor.tokenizer
+    tokenizer = _FakeTokenizer()
+    assert processor_tokenizer(tokenizer) is tokenizer
+
+
+def test_a_configured_template_lands_on_both_the_processor_and_its_tokenizer(
+    tmp_path: Path,
+) -> None:
+    path = tmp_path / "chat.jinja"
+    path.write_text("{{ messages[0]['content'] }}")
+    processor = _FakeProcessor("the checkpoint's own template")
+
+    applied = apply_chat_template_file(processor, path)
+
+    assert applied == "{{ messages[0]['content'] }}"
+    assert processor.chat_template == applied
+    assert processor.tokenizer.chat_template == applied
+
+
+def test_a_configured_template_lands_on_a_bare_tokenizer(tmp_path: Path) -> None:
+    path = tmp_path / "chat.jinja"
+    path.write_text("{{ messages[0]['content'] }}")
+    tokenizer = _FakeTokenizer()
+
+    apply_chat_template_file(tokenizer, path)
+
+    assert tokenizer.chat_template == "{{ messages[0]['content'] }}"
+
+
+def test_a_missing_template_file_is_refused_before_any_rendering(tmp_path: Path) -> None:
+    with pytest.raises(ModelConfigError, match="which does not exist"):
+        apply_chat_template_file(_FakeProcessor(), tmp_path / "absent.jinja")
+
+
+def test_an_empty_template_file_is_refused_rather_than_rendering_nothing(
+    tmp_path: Path,
+) -> None:
+    path = tmp_path / "chat.jinja"
+    path.write_text("   \n\n")
+    with pytest.raises(ModelConfigError, match="is empty"):
+        apply_chat_template_file(_FakeProcessor(), path)
+
+
+@pytest.mark.parametrize(
+    "processor",
+    [_FakeProcessor("template"), _FakeTokenizer("template")],
+)
+def test_a_present_chat_template_satisfies_the_preflight(processor: Any) -> None:
+    require_chat_template(processor, "org/base")
+
+
+def test_a_base_release_without_a_chat_template_is_refused_before_training() -> None:
+    with pytest.raises(ModelConfigError, match="ships no chat template"):
+        require_chat_template(_FakeProcessor(None), "meta-llama/Llama-3.2-3B")
+    with pytest.raises(ModelConfigError, match=r"model\.chat_template"):
+        require_chat_template(_FakeTokenizer(None), "meta-llama/Llama-3.2-3B")
