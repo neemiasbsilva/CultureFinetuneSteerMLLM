@@ -1,24 +1,38 @@
 #!/usr/bin/env bash
-# Stage 3 — matched annotation: base model and WVS cultural adapters
-#
-# Annotates ALL 3,565 σ₃P₅ images. For each architecture (smallest → largest):
-#   1. inference_only — raw base model, no LoRA adapter (no-training reference)
-#   2. wvs_cultural   — culture-specific WVS adapter (legacy cultural/ dir)
-# Both conditions share the same N_RUNS / LIMIT so results are directly
-# comparable. No persona injection — cultural bias lives in adapter weights.
-#
-# ENV overrides:
-#   MODELS="qwen3_5_2b gemma4_e2b ..."    — architectures (order preserved)
-#   CULTURES="arabic chinese ..."         — subset for trained conditions
-#   CONDITIONS="inference_only wvs_cultural"
-#   LIMIT=10                              — cap images (for smoke testing)
-#   N_RUNS=5                              — independent passes per image
-
 set -euo pipefail
 
-# Small → large: fast models produce results first; OOM-prone giants run last.
-MODELS="${MODELS:-gemma4_e2b gemma4_e4b qwen3_vl_8b gemma4_31b}"
+usage() {
+    cat <<'EOF'
+03_run_annotation.sh — Stage 3, matched annotation over all 3,565 sigma3-P5 images.
 
+Two conditions per architecture:
+  inference_only   raw base model, no LoRA adapter — the no-training reference
+  wvs_cultural     the culture-specific WVS adapter, stored in the legacy cultural/ dir
+
+Both conditions share the same N_RUNS and LIMIT, so their results are directly
+comparable. No persona is injected at inference; cultural bias lives in the
+adapter weights alone.
+
+The default MODELS order runs smallest to largest, so fast models produce results
+first and the OOM-prone giants run last.
+
+ENV overrides:
+  MODELS="qwen3_5_2b gemma4_e2b ..."          architectures, order preserved
+  CULTURES="arabic chinese ..."               subset for the trained conditions
+  CONDITIONS="inference_only wvs_cultural"
+  LIMIT=10                                    cap images, for smoke testing
+  N_RUNS=5                                    independent passes per image
+
+Usage:
+  ./scripts/03_run_annotation.sh
+EOF
+}
+
+case "${1:-}" in
+    -h|--help) usage; exit 0 ;;
+esac
+
+MODELS="${MODELS:-gemma4_e2b gemma4_e4b qwen3_vl_8b gemma4_31b}"
 CULTURES="${CULTURES:-arabic bengali chinese english german korean portuguese spanish turkish}"
 CONDITIONS="${CONDITIONS:-inference_only wvs_cultural}"
 LIMIT="${LIMIT:-}"

@@ -1,40 +1,47 @@
 #!/usr/bin/env bash
-# Stage 2 — WVS text-only LoRA fine-tuning (cultural condition only)
-#
-# For each architecture, trains one cultural model per culture using
-# WVS Q&A with a culture-specific system prompt.
-#
-# Resume behaviour:
-#   - If training was completed for a model/culture (TRAINING_DONE sentinel
-#     exists), that combination is skipped automatically.
-#   - If training was interrupted (Ctrl+C → MLflow run marked FAILED), the
-#     script resumes from the last HF checkpoint and opens a fresh MLflow run.
-#   - If the process was killed (SIGKILL → MLflow run left as RUNNING), the
-#     same MLflow run is reopened and training continues from the checkpoint.
-#
-# Backend selection:
-#   - "mlx"  → train_mlx.py  (Apple Silicon only)
-#   - "hf"   → train_hf.py   (CUDA or MPS, auto-detected)
-# MLX configs automatically fall back to train_hf.py on CUDA machines.
-#
-# ENV overrides:
-#   MODELS="gemma4_e2b phi4 ..."      — which architectures to train
-#   CULTURES="arabic chinese english" — subset of cultures
-
 set -euo pipefail
+
+usage() {
+    cat <<'EOF'
+02_train_culture_models.sh — Stage 2, WVS text-only LoRA fine-tuning.
+
+For each architecture, trains one cultural model per culture from WVS
+question/answer material under a culture-specific system prompt.
+
+Resume behaviour:
+  TRAINING_DONE sentinel present   the model/culture pair is skipped
+  interrupted (MLflow run FAILED)  resumes from the last HF checkpoint, opens a fresh run
+  killed (MLflow run RUNNING)      the same run is reopened and training continues
+
+Backend selection reads model.backend from the config:
+  mlx   train_mlx.py, Apple Silicon only; falls back to train_hf.py on CUDA machines
+  hf    train_hf.py, CUDA or MPS, auto-detected
+
+On Ctrl+C the Python subprocess marks its MLflow run FAILED before this script
+exits 130, so a re-run resumes rather than starting over.
+
+ENV overrides:
+  MODELS="gemma4_e2b phi4 ..."       which architectures to train
+  CULTURES="arabic chinese english"  subset of cultures
+
+Usage:
+  ./scripts/02_train_culture_models.sh
+EOF
+}
+
+case "${1:-}" in
+    -h|--help) usage; exit 0 ;;
+esac
 
 MODELS="${MODELS:-gemma4_e2b gemma4_31b gemma4_e4b qwen3_5_2b qwen3_27b qwen3_vl_8b}"
 CULTURES="${CULTURES:-arabic bengali chinese english german korean portuguese spanish turkish}"
 
-# On Ctrl+C: let the Python subprocess handle MLflow cleanup (marks run FAILED),
-# then exit with the standard interrupt code so the user can re-run the script.
 trap 'echo ""; echo "Interrupted. Re-run this script to resume from the last checkpoint."; exit 130' INT
 
 echo "=== culture-mllm: WVS Fine-Tuning ==="
 echo "Models     : $MODELS"
 echo "Cultures   : $CULTURES"
 
-# Detect if MLX is available (Apple Silicon only)
 MLX_AVAILABLE=$(uv run python -c "import mlx" 2>/dev/null && echo "yes" || echo "no")
 echo "MLX        : $MLX_AVAILABLE"
 echo ""

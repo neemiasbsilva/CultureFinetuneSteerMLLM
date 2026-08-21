@@ -1,12 +1,32 @@
 #!/usr/bin/env bash
-# Stage 4 — matched annotation evaluation against sigma3-P5 ground truth.
-#
-# Aggregates repeated runs per image, restricts every comparison to a common
-# valid image set, and writes paired bootstrap and fold/Holm results.
-#
-# ENV overrides: CONDITIONS, N_BOOTSTRAP, SEED, METRIC.
-
 set -euo pipefail
+
+usage() {
+    cat <<'EOF'
+04_evaluate.sh — Stage 4, matched annotation evaluation against sigma3-P5 ground truth.
+
+Aggregates the repeated runs per image, restricts every comparison to a common
+valid image set, and writes paired bootstrap and fold/Holm results.
+
+ENV overrides:
+  CONDITIONS="inference_only wvs_cultural"
+  N_BOOTSTRAP=1000                 paired bootstrap resamples
+  SEED=42
+  METRIC=f1_macro                  the per-fold metric
+  TEST_TRAIN_RATIO                 passed through only when set
+  CAPTION_EMBEDDING_MODEL          sentence-transformers model for caption cosine
+  EMBEDDING_DEVICE                 passed through only when set
+  EXPECTED_RUNS=5                  the pass-count gate
+  CULTURES, MODELS                 the expected annotation coverage
+
+Usage:
+  ./scripts/04_evaluate.sh
+EOF
+}
+
+case "${1:-}" in
+    -h|--help) usage; exit 0 ;;
+esac
 
 CONDITIONS="${CONDITIONS:-inference_only wvs_cultural}"
 N_BOOTSTRAP="${N_BOOTSTRAP:-1000}"
