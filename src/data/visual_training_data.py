@@ -20,6 +20,7 @@ import json
 import os
 import re
 from pathlib import Path
+from typing import Any
 
 import nltk
 import pandas as pd
@@ -49,12 +50,24 @@ FOLDS_DIR = Path("data/folds")
 OUTPUT_DIR = Path("data/processed")
 
 CULTURES = [
-    "arabic", "bengali", "chinese", "english", "german",
-    "korean", "portuguese", "spanish", "turkish",
+    "arabic",
+    "bengali",
+    "chinese",
+    "english",
+    "german",
+    "korean",
+    "portuguese",
+    "spanish",
+    "turkish",
 ]
 
-SENTIMENT_LABELS = {0: "negative", 1: "slightly_negative", 2: "neutral",
-                    3: "slightly_positive", 4: "positive"}
+SENTIMENT_LABELS = {
+    0: "negative",
+    1: "slightly_negative",
+    2: "neutral",
+    3: "slightly_positive",
+    4: "positive",
+}
 
 USER_PROMPT_JSON = (
     "Analyze this urban scene and provide your sentiment assessment. "
@@ -91,19 +104,25 @@ def _download_nltk_data() -> None:
 
 def load_culture_contexts() -> dict[str, str]:
     from src.data.culture_training_data import load_culture_contexts as _load
+
     return _load()
 
 
 def load_perception_vocab() -> set[str]:
+    """
+    Load the perception tag vocabulary as a lowercased set.
+
+    The source file is either a ``{"unique_perceptions": [...]}`` mapping or a
+    plain list, so both shapes are accepted.
+    """
     path = Path(PERCEPTIONS_VOCAB_JSON)
     if not path.exists():
         console.print(f"[yellow]Perception vocab not found at {path}, using empty set[/yellow]")
         return set()
     with open(path) as f:
         data = json.load(f)
-    # The file has format {"unique_perceptions": [...]} or a plain list
     if isinstance(data, dict):
-        vocab = data.get("unique_perceptions", list(data.values())[0] if data else [])
+        vocab = data.get("unique_perceptions", next(iter(data.values())) if data else [])
     else:
         vocab = data
     return {tag.lower() for tag in vocab}
@@ -115,10 +134,13 @@ def parse_caption_and_justification(caption_text: str) -> tuple[str, str]:
     Split into (caption, justification) heuristically.
     """
     caption_text = caption_text.strip()
-    # Sentiment keyword prefix (e.g. "Positive. " or "Negative. ")
-    caption_text = re.sub(r'^(Very\s+)?(Positive|Negative|Neutral|Slightly\s+\w+)\.\s*', '', caption_text, flags=re.IGNORECASE)
-    # Split at sentence boundary: first sentence = caption, rest = justification
-    sentences = re.split(r'(?<=[.!?])\s+', caption_text.strip())
+    caption_text = re.sub(
+        r"^(Very\s+)?(Positive|Negative|Neutral|Slightly\s+\w+)\.\s*",
+        "",
+        caption_text,
+        flags=re.IGNORECASE,
+    )
+    sentences = re.split(r"(?<=[.!?])\s+", caption_text.strip())
     if len(sentences) == 1:
         return sentences[0], sentences[0]
     caption = sentences[0]
@@ -127,30 +149,37 @@ def parse_caption_and_justification(caption_text: str) -> tuple[str, str]:
 
 
 def extract_tags(caption_text: str, vocab: set[str], max_tags: int = 5) -> list[str]:
-    """Extract noun phrases from caption and match against perception vocabulary."""
+    """
+    Extract noun phrases from caption and match against perception vocabulary.
+
+    Falls back to POS-tagged nouns when no vocabulary term appears in the caption.
+    """
     _download_nltk_data()
     tokens = nltk.word_tokenize(caption_text.lower())
     tags_from_vocab = [t for t in vocab if t in caption_text.lower()][:max_tags]
     if tags_from_vocab:
         return tags_from_vocab[:max_tags]
-    # Fallback: extract nouns via POS tagging
     pos_tags = nltk.pos_tag(tokens)
     nouns = [word for word, pos in pos_tags if pos in ("NN", "NNS", "NNP", "NNPS")]
     stop = {"image", "scene", "area", "place", "building", "photo", "picture"}
     nouns = [n for n in nouns if n not in stop and len(n) > 3]
-    return list(dict.fromkeys(nouns))[:max_tags]  # dedup, preserve order
+    return list(dict.fromkeys(nouns))[:max_tags]
 
 
-def load_existing_captions() -> dict[str, dict]:
-    """Returns {image_id: {caption, justification}} from existing MLLM outputs."""
+def load_existing_captions() -> dict[str, dict[str, str]]:
+    """
+    Returns {image_id: {caption, justification}} from existing MLLM outputs.
+
+    The CSV stores a full ``image_path`` such as ``/path/to/{id}.jpg``, so the
+    image id is recovered from the filename stem.
+    """
     path = Path(EXISTING_CAPTIONS_CSV)
     if not path.exists():
         console.print(f"[yellow]Existing captions CSV not found: {path}[/yellow]")
         return {}
     df = pd.read_csv(path)
-    result: dict[str, dict] = {}
+    result: dict[str, dict[str, str]] = {}
     for _, row in df.iterrows():
-        # image_path is like "/path/to/{id}.jpg"
         img_path = str(row.get("image_path", ""))
         image_id = Path(img_path).stem
         caption_raw = str(row.get("caption", ""))
@@ -168,7 +197,7 @@ def build_example(
     tags: list[str],
     culture: str | None,
     culture_context: str | None,
-) -> dict:
+) -> dict[str, Any]:
     if culture and culture_context:
         system = SYSTEM_PROMPT_CULTURAL.format(culture=culture, context=culture_context)
         condition = "cultural"
@@ -176,12 +205,15 @@ def build_example(
         system = SYSTEM_PROMPT_BASELINE
         condition = "baseline"
 
-    assistant_output = json.dumps({
-        "sentiment": sentiment,
-        "caption": caption,
-        "justification": justification,
-        "tags": tags,
-    }, ensure_ascii=False)
+    assistant_output = json.dumps(
+        {
+            "sentiment": sentiment,
+            "caption": caption,
+            "justification": justification,
+            "tags": tags,
+        },
+        ensure_ascii=False,
+    )
 
     return {
         "condition": condition,
@@ -206,14 +238,12 @@ def generate_fold_data(
     fold_n: int,
     split: str,
     contexts: dict[str, str],
-    existing_captions: dict[str, dict],
+    existing_captions: dict[str, dict[str, str]],
     vocab: set[str],
-) -> list[dict]:
+) -> list[dict[str, Any]]:
     fold_path = FOLDS_DIR / f"fold_{fold_n}_{split}.csv"
     if not fold_path.exists():
-        raise FileNotFoundError(
-            f"Fold file not found: {fold_path}. Run make_folds.py first."
-        )
+        raise FileNotFoundError(f"Fold file not found: {fold_path}. Run make_folds.py first.")
     df = pd.read_csv(fold_path)
     images_path = Path(IMAGES_DIR)
     examples = []
@@ -226,17 +256,25 @@ def generate_fold_data(
         sentiment = int(row["sentiment"])
 
         cap_data = existing_captions.get(image_id, {})
-        caption = cap_data.get("caption", f"An urban scene with sentiment {SENTIMENT_LABELS[sentiment]}.")
-        justification = cap_data.get("justification", "The visual elements of the scene suggest this emotional tone.")
+        caption = cap_data.get(
+            "caption", f"An urban scene with sentiment {SENTIMENT_LABELS[sentiment]}."
+        )
+        justification = cap_data.get(
+            "justification", "The visual elements of the scene suggest this emotional tone."
+        )
         tags = extract_tags(cap_data.get("raw", caption), vocab)
 
-        ex = build_example(image_id, image_path, sentiment, caption, justification, tags, culture, context)
+        ex = build_example(
+            image_id, image_path, sentiment, caption, justification, tags, culture, context
+        )
         examples.append(ex)
 
     return examples
 
 
-def save_examples(examples: list[dict], culture: str | None, fold_n: int, split: str) -> Path:
+def save_examples(
+    examples: list[dict[str, Any]], culture: str | None, fold_n: int, split: str
+) -> Path:
     cond_dir = OUTPUT_DIR / (culture if culture else "baseline")
     cond_dir.mkdir(parents=True, exist_ok=True)
     out_path = cond_dir / f"fold_{fold_n}_{split}.jsonl"
@@ -247,8 +285,13 @@ def save_examples(examples: list[dict], culture: str | None, fold_n: int, split:
 
 
 def main() -> None:
+    """
+    CLI entry point.
+
+    A ``None`` entry in the list of cultures denotes the baseline condition.
+    """
     parser = argparse.ArgumentParser(description="Build visual VLM SFT training examples.")
-    parser.add_argument("--culture", choices=CULTURES + ["baseline"])
+    parser.add_argument("--culture", choices=[*CULTURES, "baseline"])
     parser.add_argument("--all-cultures", action="store_true")
     parser.add_argument("--fold", type=int, choices=range(1, 6))
     parser.add_argument("--all-folds", action="store_true")
@@ -264,7 +307,7 @@ def main() -> None:
 
     cultures_to_run: list[str | None] = []
     if args.all_cultures:
-        cultures_to_run = CULTURES + [None]  # None = baseline
+        cultures_to_run = [*CULTURES, None]
     elif args.culture:
         cultures_to_run = [None if args.culture == "baseline" else args.culture]
     else:
@@ -279,7 +322,9 @@ def main() -> None:
             label = culture if culture else "baseline"
             for split in ("train", "val"):
                 console.print(f"[bold]Building[/bold] {label} / fold {fold_n} / {split}...")
-                examples = generate_fold_data(culture, fold_n, split, contexts, existing_captions, vocab)
+                examples = generate_fold_data(
+                    culture, fold_n, split, contexts, existing_captions, vocab
+                )
 
                 if args.dry_run:
                     if split == "train":

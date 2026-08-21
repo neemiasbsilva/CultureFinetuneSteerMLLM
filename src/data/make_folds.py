@@ -12,11 +12,11 @@ Usage:
 
 import argparse
 import os
-import sys
+from collections.abc import Hashable
 from pathlib import Path
+from typing import Any
 
 import mlflow
-import numpy as np
 import pandas as pd
 from dotenv import load_dotenv
 from rich.console import Console
@@ -34,7 +34,7 @@ IMAGES_DIR = os.getenv("PERCEPTSENT_IMAGES_DIR", "../perceptsent/images")
 OUTPUT_DIR = Path("data/folds")
 ALL_TRAIN_CSV = Path("data/all_train.csv")
 
-SENTIMENT_LABELS = {
+SENTIMENT_LABELS: dict[Hashable, str] = {
     0: "negative",
     1: "slightly_negative",
     2: "neutral",
@@ -61,7 +61,14 @@ def load_and_validate(agreement_csv: str, images_dir: str) -> pd.DataFrame:
     return df
 
 
-def check_class_balance(folds: list[tuple], labels: pd.Series, n_folds: int) -> None:
+def check_class_balance(folds: list[tuple[Any, Any]], labels: pd.Series, n_folds: int) -> None:
+    """
+    Print the per-fold validation class distribution and warn on skewed folds.
+
+    A fold is flagged when a class proportion deviates from the global
+    distribution by more than 5 percentage points; a tighter tolerance would
+    reject valid splits on the small classes.
+    """
     table = Table(title="Class distribution per fold (val set)")
     table.add_column("Fold")
     for c in sorted(labels.unique()):
@@ -79,7 +86,6 @@ def check_class_balance(folds: list[tuple], labels: pd.Series, n_folds: int) -> 
 
     console.print(table)
 
-    # 5% tolerance: tighter than that would reject valid splits on small classes.
     global_dist = labels.value_counts(normalize=True).sort_index()
     for fold_idx, (_, val_idx) in enumerate(folds):
         fold_dist = labels.iloc[val_idx].value_counts(normalize=True).sort_index()
@@ -87,7 +93,7 @@ def check_class_balance(folds: list[tuple], labels: pd.Series, n_folds: int) -> 
             delta = abs(global_dist[c] - fold_dist.get(c, 0.0))
             if delta > 0.05:
                 console.print(
-                    f"[red]WARNING fold {fold_idx+1} class {c}: "
+                    f"[red]WARNING fold {fold_idx + 1} class {c}: "
                     f"delta={delta:.3f} > 0.05 threshold[/red]"
                 )
 
@@ -100,7 +106,7 @@ def create_folds(
     check_class_balance(fold_splits, df["sentiment"], n_folds)
 
     results = []
-    for fold_idx, (train_idx, val_idx) in enumerate(fold_splits):
+    for train_idx, val_idx in fold_splits:
         train_df = df.iloc[train_idx].reset_index(drop=True)
         val_df = df.iloc[val_idx].reset_index(drop=True)
         results.append((train_df, val_df))
@@ -108,25 +114,19 @@ def create_folds(
     return results
 
 
-def save_folds(
-    folds: list[tuple[pd.DataFrame, pd.DataFrame]], output_dir: Path
-) -> None:
+def save_folds(folds: list[tuple[pd.DataFrame, pd.DataFrame]], output_dir: Path) -> None:
     output_dir.mkdir(parents=True, exist_ok=True)
     for fold_idx, (train_df, val_df) in enumerate(folds):
-        train_df.to_csv(output_dir / f"fold_{fold_idx+1}_train.csv", index=False)
-        val_df.to_csv(output_dir / f"fold_{fold_idx+1}_val.csv", index=False)
-        console.print(
-            f"  fold {fold_idx+1}: {len(train_df)} train / {len(val_df)} val"
-        )
+        train_df.to_csv(output_dir / f"fold_{fold_idx + 1}_train.csv", index=False)
+        val_df.to_csv(output_dir / f"fold_{fold_idx + 1}_val.csv", index=False)
+        console.print(f"  fold {fold_idx + 1}: {len(train_df)} train / {len(val_df)} val")
 
 
 def log_to_mlflow(df: pd.DataFrame, n_folds: int) -> None:
     tracking_uri = os.getenv("MLFLOW_TRACKING_URI", "http://127.0.0.1:5000")
     try:
         mlflow.set_tracking_uri(tracking_uri)
-        mlflow.set_experiment(
-            os.getenv("MLFLOW_EXPERIMENT_TRAINING", "culture_mllm_training")
-        )
+        mlflow.set_experiment(os.getenv("MLFLOW_EXPERIMENT_TRAINING", "culture_mllm_training"))
         with mlflow.start_run(run_name="data_fold_creation"):
             mlflow.log_param("n_images", len(df))
             mlflow.log_param("n_folds", n_folds)
@@ -138,7 +138,9 @@ def log_to_mlflow(df: pd.DataFrame, n_folds: int) -> None:
 
 
 def main() -> None:
-    parser = argparse.ArgumentParser(description="Create stratified k-folds for CultureVLM training.")
+    parser = argparse.ArgumentParser(
+        description="Create stratified k-folds for CultureVLM training."
+    )
     parser.add_argument("--n-folds", type=int, default=5)
     parser.add_argument("--seed", type=int, default=42)
     parser.add_argument("--agreement-csv", default=AGREEMENT_CSV)
@@ -155,7 +157,7 @@ def main() -> None:
 
     console.print("\nGlobal sentiment distribution:")
     for c, count in df["sentiment"].value_counts().sort_index().items():
-        console.print(f"  {c} ({SENTIMENT_LABELS[c]}): {count} ({count/len(df)*100:.1f}%)")
+        console.print(f"  {c} ({SENTIMENT_LABELS[c]}): {count} ({count / len(df) * 100:.1f}%)")
 
     folds = create_folds(df, n_folds=args.n_folds, seed=args.seed)
     save_folds(folds, OUTPUT_DIR)

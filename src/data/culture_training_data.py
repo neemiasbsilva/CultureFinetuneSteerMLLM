@@ -16,6 +16,7 @@ import glob
 import json
 import os
 from pathlib import Path
+from typing import Any
 
 from dotenv import load_dotenv
 from rich.console import Console
@@ -30,8 +31,15 @@ CULTURE_CONTEXT_JSONL = os.getenv(
 OUTPUT_DIR = Path("data/processed")
 
 CULTURES = [
-    "arabic", "bengali", "chinese", "english", "german",
-    "korean", "portuguese", "spanish", "turkish",
+    "arabic",
+    "bengali",
+    "chinese",
+    "english",
+    "german",
+    "korean",
+    "portuguese",
+    "spanish",
+    "turkish",
 ]
 
 NEUTRAL_SYSTEM_PROMPT = "You are a helpful assistant."
@@ -70,13 +78,17 @@ def load_culture_contexts() -> dict[str, str]:
     return contexts
 
 
-def load_wvs_culture_data(culture: str) -> list[dict]:
+def load_wvs_culture_data(culture: str) -> list[dict[str, Any]]:
     """
     Load per-culture WVS Q&A from CultureLLM.
 
     The CultureLLM files already use chat-completion format. We normalise
     them so the 'content' field is always a plain string (not a list), making
     them compatible with VLM SFT trainers that process text-only turns.
+
+    File selection is prioritised: the ``_1000.jsonl`` files hold the largest
+    WVS set and are preferred, while the ``sentence_only`` and ``llama``
+    variants are excluded.
     """
     dir_name = CULTURE_DIR_MAP.get(culture)
     if not dir_name:
@@ -90,7 +102,6 @@ def load_wvs_culture_data(culture: str) -> list[dict]:
     pattern = str(finetune_dir / f"WVQ_{dir_name}_*.jsonl")
     files = glob.glob(pattern)
 
-    # Priority: _1000.jsonl (largest WVS set) → exclude sentence_only/llama variants
     clean = [f for f in files if "_sentence_only" not in f and "_llama" not in f and "_L." not in f]
     preferred_1000 = [f for f in clean if f.endswith("_1000.jsonl")]
     files_to_use = preferred_1000 if preferred_1000 else clean if clean else files
@@ -108,7 +119,6 @@ def load_wvs_culture_data(culture: str) -> list[dict]:
                 for msg in msgs:
                     content = msg["content"]
                     if isinstance(content, list):
-                        # Flatten list content to string for text-only turns
                         content = " ".join(
                             item.get("text", "") if isinstance(item, dict) else str(item)
                             for item in content
@@ -116,11 +126,14 @@ def load_wvs_culture_data(culture: str) -> list[dict]:
                     normalised.append({"role": msg["role"], "content": content})
                 examples.append({"messages": normalised})
 
-    console.print(f"  [green]{culture}[/green]: loaded {len(examples)} WVS examples from {len(files_to_use)} files")
+    console.print(
+        f"  [green]{culture}[/green]: loaded {len(examples)} WVS examples "
+        f"from {len(files_to_use)} files"
+    )
     return examples
 
 
-def make_baseline_variant(examples: list[dict]) -> list[dict]:
+def make_baseline_variant(examples: list[dict[str, Any]]) -> list[dict[str, Any]]:
     """Replace the culture-specific system prompt with a neutral one."""
     out = []
     for ex in examples:
@@ -130,10 +143,16 @@ def make_baseline_variant(examples: list[dict]) -> list[dict]:
     return out
 
 
-def save_culture_wvs_data(culture: str, examples: list[dict], condition: str = "cultural") -> Path:
+def save_culture_wvs_data(
+    culture: str, examples: list[dict[str, Any]], condition: str = "cultural"
+) -> Path:
     out_dir = OUTPUT_DIR / culture
     out_dir.mkdir(parents=True, exist_ok=True)
-    filename = "wvs_cultural_anchoring.jsonl" if condition == "cultural" else "wvs_baseline_anchoring.jsonl"
+    filename = (
+        "wvs_cultural_anchoring.jsonl"
+        if condition == "cultural"
+        else "wvs_baseline_anchoring.jsonl"
+    )
     out_path = out_dir / filename
     with open(out_path, "w") as f:
         for ex in examples:
