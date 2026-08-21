@@ -11,7 +11,7 @@
 ![scikit-learn](https://img.shields.io/badge/scikit--learn-1.4-F7931E?logo=scikitlearn&logoColor=white)
 ![Ruff](https://img.shields.io/badge/Ruff-passing-D7FF64?logo=ruff&logoColor=black)
 ![mypy](https://img.shields.io/badge/mypy-strict-2A6DB2)
-![tests](https://img.shields.io/badge/tests-278%20passing-4c1)
+![tests](https://img.shields.io/badge/tests-373%20passing-4c1)
 
 This repository extends [CultureLLM](https://arxiv.org/pdf/2402.10946)
 (Li et al., NeurIPS 2024), which fine-tunes language models on World Values
@@ -35,9 +35,12 @@ instructions in the prompt.
 ```text
 ├── configs/                     one YAML per architecture: model id, LoRA, quantization
 │   ├── gemma4_e2b.yaml  gemma4_e4b.yaml  gemma4_31b.yaml
-│   ├── qwen3_5_2b.yaml  qwen3_vl_8b.yaml  qwen3_27b.yaml
+│   ├── qwen3_5_2b.yaml  qwen3_vl_2b.yaml  qwen3_vl_8b.yaml  qwen3_27b.yaml
 │   ├── muse_glimmer_30b.yaml    QLoRA, transformers 5.15 architecture
-│   └── phi4.yaml
+│   ├── llama3_2_3b.yaml         text-only base, pinned chat template
+│   ├── llama_guard4_12b.yaml    QLoRA, gated safety-classifier base
+│   ├── phi4.yaml
+│   └── templates/               chat templates for bases that ship none
 │
 ├── scripts/                     numbered pipeline stages, each with --help
 │   ├── _common.sh               sourced helpers: die, log, require_uv
@@ -147,6 +150,23 @@ before the first optimizer step.
 ./scripts/02_train_culture_models.sh                          # every model × culture
 MODELS="gemma4_e2b" CULTURES="arabic german" ./scripts/02_train_culture_models.sh
 ```
+
+`MODELS` is the run list; `configs/` is the registry. Architectures added for one
+culture — `muse_glimmer_30b`, `qwen3_vl_2b`, `llama3_2_3b`, `llama_guard4_12b`, all
+German — are named explicitly rather than added to the default sweep. See
+[EXPERIMENTS.md](EXPERIMENTS.md) for what each one is there to isolate.
+
+Three `model` keys decide how a base is loaded, and all three are validated
+against the checkpoint's own metadata before any weights are read:
+
+| Key | Values | What it selects |
+| --- | --- | --- |
+| `modality` | `vision_text` (default), `text` | `AutoModelForImageTextToText` + `AutoProcessor`, or `AutoModelForCausalLM` + `AutoTokenizer` |
+| `quantization` | omitted, `4bit` | immediate load at `dtype`, or QLoRA via bitsandbytes NF4 |
+| `chat_template` | omitted, a `.jinja` path | the checkpoint's own template, or one from `configs/templates/` |
+
+A text-only base still trains on the WVS track — its supervision is text — but it
+has no vision path, so it never enters stage 3.
 
 | Artifact | Contents |
 | --- | --- |
