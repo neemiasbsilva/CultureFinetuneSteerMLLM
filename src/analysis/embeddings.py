@@ -11,11 +11,16 @@ Usage:
     em.encode_column(df, "caption", cache_path="outputs/analysis/caption_embs_qwen_vl.npy")
 """
 
+from __future__ import annotations
+
 from pathlib import Path
+from typing import TYPE_CHECKING
 
 import numpy as np
 from sentence_transformers import SentenceTransformer
-from tqdm import tqdm
+
+if TYPE_CHECKING:
+    import pandas as pd
 
 
 class EmbeddingManager:
@@ -45,7 +50,7 @@ class EmbeddingManager:
         if cache_path:
             cache_path = Path(cache_path)
             if cache_path.exists():
-                embs = np.load(str(cache_path))
+                embs: np.ndarray = np.load(str(cache_path))
                 if embs.shape[0] == len(texts):
                     return embs
 
@@ -66,7 +71,7 @@ class EmbeddingManager:
 
     def encode_column(
         self,
-        df,
+        df: pd.DataFrame,
         column: str,
         cache_path: str | Path | None = None,
         fill_value: str = "",

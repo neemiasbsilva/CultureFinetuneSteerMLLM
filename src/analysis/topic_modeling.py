@@ -18,7 +18,6 @@ from hdbscan import HDBSCAN
 from sklearn.feature_extraction.text import CountVectorizer
 from umap import UMAP
 
-# Hyperparameters matching analyzing-persona-effects-mllm
 BERTOPIC_MIN_CLUSTER_SIZE = 80
 BERTOPIC_N_COMPONENTS = 5
 BERTOPIC_N_NEIGHBORS = 15
@@ -33,7 +32,7 @@ def fit_bertopic(
     n_neighbors: int = BERTOPIC_N_NEIGHBORS,
     min_df: int = BERTOPIC_MIN_DF,
     seed: int = 42,
-) -> tuple:
+) -> tuple[BERTopic, list[int], np.ndarray | None]:
     """
     Fit BERTopic on pre-computed embeddings.
     Returns (model, topics, probabilities).
@@ -75,7 +74,8 @@ def topic_sentiment_composition(
     """
     df = df.copy()
     df["topic"] = topics
-    cross = pd.crosstab(df["topic"], df[sentiment_col], normalize="index")
+    index = [df["condition"], df["topic"]] if "condition" in df.columns else df["topic"]
+    cross = pd.crosstab(index, df[sentiment_col], normalize="index")
     return cross
 
 
@@ -90,14 +90,13 @@ def topic_culture_proportions(
     """
     df = df.copy()
     df["topic"] = topics
-    cross = pd.crosstab(df["topic"], df[culture_col], normalize="columns")
+    columns = [df["condition"], df[culture_col]] if "condition" in df.columns else df[culture_col]
+    cross = pd.crosstab(df["topic"], columns, normalize="columns")
     return cross
 
 
-def save_topic_info(
-    model: BERTopic, output_path: str, n_words: int = 10
-) -> pd.DataFrame:
+def save_topic_info(model: BERTopic, output_path: str, n_words: int = 10) -> pd.DataFrame:
     """Save topic metadata to CSV."""
-    info = model.get_topic_info()
+    info: pd.DataFrame = model.get_topic_info()
     info.to_csv(output_path, index=False)
     return info
