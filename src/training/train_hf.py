@@ -6,10 +6,12 @@ Training input: WVS cultural Q&A text by default, or any chat-format JSONL
 `data: {train_jsonl, val_jsonl}` section.
 Device is selected automatically: cuda > mps > cpu.
 How the base weights are loaded is declared by `training.quantization` and
-enforced by src/utils/model_loading.py: "4bit" for QLoRA via bitsandbytes,
-omitted for an immediate load. The config is validated against the checkpoint's
-own metadata before any weights are read, and the loaded base must beat uniform
-guessing on a real batch before the first optimizer step.
+`model.modality`, and enforced by src/utils/model_loading.py: "4bit" for QLoRA
+via bitsandbytes, omitted for an immediate load; "text" for a text-only base
+such as llama3_2_3b, "vision_text" (the default) for a composite one. The config
+is validated against the checkpoint's own metadata before any weights are read,
+and the loaded base must beat uniform guessing on a real batch before the first
+optimizer step.
 
 Training automatically resumes from the latest checkpoint if one exists,
 and continues logging to the same MLflow run.
@@ -37,20 +39,22 @@ import yaml
 from dotenv import load_dotenv
 from peft import LoraConfig, TaskType
 from rich.console import Console
-from transformers import (
-    AutoModelForImageTextToText,
-    AutoProcessor,
-    TrainerCallback,
-)
+from transformers import TrainerCallback
 from trl import SFTConfig, SFTTrainer  # type: ignore[attr-defined]
 
 from src.data.dataset import load_hf_dataset
 from src.training.early_stopping import EarlyStopping
 from src.utils.device import get_device
 from src.utils.model_loading import (
+    apply_chat_template_file,
+    auto_class_for_modality,
     build_base_model,
+    load_processor,
+    processor_tokenizer,
+    require_chat_template,
     resolve_dtype,
     validate_base_model_config,
+    validate_modality,
 )
 
 load_dotenv()
@@ -58,6 +62,19 @@ console = Console()
 
 PROCESSED_DIR = Path("data/processed")
 CHECKPOINTS_DIR = Path("checkpoints")
+
+VISION_TEXT_EXCLUDE_MODULES = ".*(vision_tower|audio_tower).*"
+
+
+def default_exclude_modules(modality: str) -> str | None:
+    """Keep LoRA on the language path, which a text-only base is entirely made of.
+
+    A text-only checkpoint has no tower to exclude, and PEFT warns when an
+    exclusion pattern matches nothing — noise that reads like a misconfigured
+    adapter every run. Composite configs may still name their own pattern:
+    the families disagree on what the tower is called.
+    """
+    return None if modality == "text" else VISION_TEXT_EXCLUDE_MODULES
 
 
 def load_config(config_path: str) -> dict[str, Any]:
@@ -487,7 +504,7 @@ def _assert_base_is_sane(trainer: Any, model: Any, processor: Any) -> tuple[floa
     import math
 
     text_config = model.config.get_text_config()
-    vocab_size = getattr(text_config, "vocab_size", None) or len(processor.tokenizer)
+    vocab_size = getattr(text_config, "vocab_size", None) or len(processor_tokenizer(processor))
     guess_loss = math.log(vocab_size)
 
     batch = next(iter(trainer.get_train_dataloader()))
@@ -572,8 +589,10 @@ def train(cfg: dict[str, Any], model_name: str, culture: str, debug: bool) -> No
     console.print(f"Device    : [bold]{device}[/bold]")
     console.print(f"Loading model [bold]{model_cfg['id']}[/bold]...")
 
+    modality = validate_modality(model_cfg["id"], model_cfg)
     quantization = validate_base_model_config(model_cfg["id"], model_cfg, train_cfg)
     torch_dtype = resolve_dtype(model_cfg)
+    console.print(f"  Modality: {modality}")
     if quantization:
         console.print(f"  [yellow]Quantization: {quantization}[/yellow]")
 
@@ -587,7 +606,7 @@ def train(cfg: dict[str, Any], model_name: str, culture: str, debug: bool) -> No
     _check_vram_headroom(model_cfg, quantization, device)
     model = build_base_model(
         model_cfg["id"],
-        auto_class=AutoModelForImageTextToText,
+        auto_class=auto_class_for_modality(modality),
         quantization=quantization,
         dtype=torch_dtype,
         device=device,
@@ -607,13 +626,26 @@ def train(cfg: dict[str, Any], model_name: str, culture: str, debug: bool) -> No
     if train_cfg.get("gradient_checkpointing", False):
         model.gradient_checkpointing_enable()
 
-    processor = AutoProcessor.from_pretrained(  # type: ignore[no-untyped-call]
-        model_cfg["id"], trust_remote_code=True
-    )
-    image_budget = configure_processor_image_budget(processor, model_cfg.get("image_max_pixels"))
-    if image_budget:
-        console.print(f"  Image processor budget: {image_budget}")
-    processor.tokenizer.model_max_length = train_cfg["max_seq_len"]
+    processor = load_processor(model_cfg["id"], modality)
+    if modality == "text":
+        if model_cfg.get("image_max_pixels") is not None:
+            raise ValueError(
+                'model.image_max_pixels is set on a modality: "text" config, where no '
+                "image ever reaches the model. Remove the key so the config describes "
+                "what is actually trained."
+            )
+    else:
+        image_budget = configure_processor_image_budget(
+            processor, model_cfg.get("image_max_pixels")
+        )
+        if image_budget:
+            console.print(f"  Image processor budget: {image_budget}")
+
+    if model_cfg.get("chat_template"):
+        apply_chat_template_file(processor, model_cfg["chat_template"])
+        console.print(f"  Chat template: {model_cfg['chat_template']}")
+    require_chat_template(processor, model_cfg["id"])
+    processor_tokenizer(processor).model_max_length = train_cfg["max_seq_len"]
 
     peft_config = LoraConfig(
         task_type=TaskType.CAUSAL_LM,
@@ -621,7 +653,7 @@ def train(cfg: dict[str, Any], model_name: str, culture: str, debug: bool) -> No
         lora_alpha=lora_cfg["alpha"],
         lora_dropout=lora_cfg["dropout"],
         target_modules=lora_cfg["target_modules"],
-        exclude_modules=lora_cfg.get("exclude_modules", ".*(vision_tower|audio_tower).*"),
+        exclude_modules=lora_cfg.get("exclude_modules", default_exclude_modules(modality)),
         bias="none",
     )
 
