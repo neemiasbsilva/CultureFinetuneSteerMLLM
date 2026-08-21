@@ -6,26 +6,38 @@ inference-only base MLLM reference against the full σ₃P₅ image set.
 Each image can be annotated across multiple independent passes so answer
 variance can be analyzed.
 
+``MODEL_NAMES`` spans the original Mac/MLX models (qwen3_5_2b, phi4, gemma4_e2b)
+and the HF-backend models: Gemma-4 (gemma4_e4b, gemma4_31b), Qwen3-VL / Qwen3
+(qwen3_vl_2b, qwen3_vl_8b, qwen3_27b), Muse Glimmer (muse_glimmer_30b, QLoRA)
+and Llama Guard 4 (llama_guard4_12b, QLoRA).  It is a registry, not a run list:
+``03_run_annotation.sh`` names the models a given experiment actually annotates
+with.  The text-only ``llama3_2_3b`` is deliberately absent — it is trained on
+the WVS track but has no vision path to annotate through.
+
 Usage:
     uv run python src/annotation/pipeline.py \
         --culture arabic \
         --model-name qwen_vl \
-        --condition cultural
+        --condition wvs_cultural
+
+Smoke test with repeated annotations:
 
     uv run python src/annotation/pipeline.py \
         --culture arabic \
         --model-name qwen_vl \
-        --condition cultural \
+        --condition wvs_cultural \
         --limit 10 \
-        --n-runs 5     # smoke test, repeated annotations
+        --n-runs 5
 
-    # Raw base-model inference, no LoRA adapter loaded
+Raw base-model inference, no LoRA adapter loaded:
+
     uv run python src/annotation/pipeline.py \
         --culture inference_only \
         --model-name qwen_vl \
         --condition inference_only
 
-    # All cultures × all models × trained conditions, plus raw base-model inference
+All cultures × all models × trained conditions, plus raw base-model inference:
+
     uv run python src/annotation/pipeline.py --all
 """
 
@@ -33,21 +45,32 @@ import argparse
 import asyncio
 import json
 import os
-from datetime import datetime, timezone
+from datetime import UTC, datetime
 from pathlib import Path
+from typing import Any
 
 import pandas as pd
 from dotenv import load_dotenv
 from rich.console import Console
-from rich.progress import Progress, SpinnerColumn, TextColumn
 
+from src.annotation.conditions import (
+    CONDITIONS as CANONICAL_CONDITIONS,
+)
+from src.annotation.conditions import (
+    LEGACY_CONDITION_ALIASES,
+    TRAINED_CONDITIONS,
+    normalize_condition,
+)
 from src.annotation.config import (
     ANNOTATION_SYSTEM_PROMPT,
     SENTIMENT_INT_TO_LABEL,
     AnnotatorSettings,
+    annotation_seed,
 )
 from src.annotation.graph import build_annotation_graph
+from src.annotation.nodes.annotator import validate_inference_assets
 from src.annotation.nodes.image_loader import ImageCache
+from src.annotation.state import CulturalAnnotationState
 
 load_dotenv()
 console = Console()
@@ -61,21 +84,42 @@ CHECKPOINTS_DIR = Path("checkpoints")
 IMAGES_DIR = os.getenv("PERCEPTSENT_IMAGES_DIR", "../perceptsent/images")
 
 CULTURES = [
-    "arabic", "bengali", "chinese", "english", "german",
-    "korean", "portuguese", "spanish", "turkish",
+    "arabic",
+    "bengali",
+    "chinese",
+    "english",
+    "german",
+    "korean",
+    "portuguese",
+    "spanish",
+    "turkish",
 ]
 INFERENCE_ONLY_CULTURE = "inference_only"
-CONDITIONS = ["cultural", "baseline", "inference_only"]
+CONDITIONS = list(CANONICAL_CONDITIONS)
 MODEL_NAMES = [
-    "qwen3_5_2b", "phi4", "gemma4_e2b",    # original Mac/MLX models
-    "gemma4_e4b", "gemma4_31b",            # Gemma-4 (HF backend)
-    "qwen3_vl_8b", "qwen3_27b",             # Qwen3-VL / Qwen3 (HF backend)
+    "qwen3_5_2b",
+    "phi4",
+    "gemma4_e2b",
+    "gemma4_e4b",
+    "gemma4_31b",
+    "qwen3_vl_2b",
+    "qwen3_vl_8b",
+    "qwen3_27b",
+    "muse_glimmer_30b",
+    "llama_guard4_12b",
+]
+SHARED_EXPERIMENT_MODELS = [
+    "gemma4_e2b",
+    "gemma4_e4b",
+    "qwen3_vl_8b",
+    "gemma4_31b",
 ]
 
 
 def load_image_list(limit: int | None = None) -> pd.DataFrame:
     df = pd.read_csv(AGREEMENT_CSV, index_col=0)
     df = df.rename(columns={"id": "image_id"})
+    df["image_id"] = df["image_id"].astype(str)
     images_path = Path(IMAGES_DIR)
     df["image_path"] = df["image_id"].apply(lambda x: str(images_path / f"{x}.jpg"))
     df = df[df["image_path"].apply(lambda p: Path(p).exists())].reset_index(drop=True)
@@ -85,7 +129,18 @@ def load_image_list(limit: int | None = None) -> pd.DataFrame:
 
 
 def load_existing_annotation_ids(out_path: Path) -> set[str]:
-    """Resume support: skip already-completed run/image annotations."""
+    """Resume support: skip already-completed run/image annotations.
+
+    Annotation IDs are rebuilt from each record's own fields whenever those fields are
+    present, so a legacy ``cultural`` record resumes as canonical ``wvs_cultural`` rather
+    than being annotated again.
+
+    Args:
+        out_path (Path): JSONL file previously written by this pipeline.
+
+    Returns:
+        set[str]: Annotation IDs already recorded in ``out_path``.
+    """
     if not out_path.exists():
         return set()
     ids = set()
@@ -94,6 +149,22 @@ def load_existing_annotation_ids(out_path: Path) -> set[str]:
             line = line.strip()
             if line:
                 rec = json.loads(line)
+                required = {"model_name", "culture", "condition", "image_id"}
+                if required.issubset(rec):
+                    run_index = int(rec.get("run_index", 1))
+                    try:
+                        ids.add(
+                            build_annotation_id(
+                                str(rec["model_name"]),
+                                str(rec["culture"]),
+                                str(rec["condition"]),
+                                str(rec["image_id"]),
+                                run_index,
+                            )
+                        )
+                        continue
+                    except ValueError:
+                        pass
                 annotation_id = rec.get("annotation_id")
                 if annotation_id:
                     ids.add(str(annotation_id))
@@ -114,26 +185,27 @@ def build_annotation_id(
 ) -> str:
     """Mirror mllm-persona-evaluation's p<run>_img_<image>_<condition> IDs."""
     run_id = build_run_id(model_name, culture, run_index)
-    return f"p{run_id}_img_{image_id}_{condition}"
+    return f"p{run_id}_img_{image_id}_{normalize_condition(condition)}"
 
 
 def build_annotation_record(
-    state: dict,
+    state: dict[str, Any],
     model_name: str,
     culture: str,
     condition: str,
-) -> dict:
+) -> dict[str, Any]:
     """Flatten a completed LangGraph state into a serialisable annotation record.
 
     Args:
         state (dict): Final graph state after all nodes have run.
         model_name (str): Model identifier (e.g., "qwen3_5_2b").
         culture (str): Culture name (e.g., "arabic").
-        condition (str): Annotation condition ("cultural", "baseline", "inference_only").
+        condition (str): Canonical annotation condition (legacy ``cultural`` is accepted).
 
     Returns:
         dict: Flat record suitable for JSONL serialisation.
     """
+    condition = normalize_condition(condition)
     parsed = state.get("parsed") or {}
     sentiment_int = parsed.get("sentiment", -1)
     run_index = int(state["run_index"])
@@ -154,6 +226,11 @@ def build_annotation_record(
         "culture": culture,
         "model_name": model_name,
         "condition": condition,
+        "checkpoint_identity": state.get("checkpoint_identity"),
+        "checkpoint_path": state.get("checkpoint_path"),
+        "adapter_backend": state.get("adapter_backend"),
+        "seed": int(state.get("seed", -1)),
+        "generation_seed": int(state.get("generation_seed", state.get("seed", -1))),
         "ground_truth_sentiment": state["ground_truth_sentiment"],
         "predicted_sentiment": sentiment_int,
         "predicted_sentiment_label": SENTIMENT_INT_TO_LABEL.get(sentiment_int, "unknown"),
@@ -161,8 +238,11 @@ def build_annotation_record(
         "caption": parsed.get("caption", ""),
         "justification": parsed.get("justification", ""),
         "parse_retries": state.get("parse_retries", 0),
+        "parse_strategy": state.get("parse_strategy", "legacy_unknown"),
+        "parse_valid": state.get("parsed") is not None and not state.get("error"),
+        "raw_output": state.get("raw_output", "") if state.get("parsed") is None else "",
         "error": state.get("error"),
-        "timestamp_utc": datetime.now(timezone.utc).isoformat(),
+        "timestamp_utc": datetime.now(UTC).isoformat(),
     }
 
 
@@ -176,7 +256,29 @@ async def run_pipeline(
     out_path: Path,
     failures_path: Path,
     n_runs: int,
-) -> dict:
+) -> dict[str, Any]:
+    """Annotate every image in ``df`` across ``n_runs`` independent passes.
+
+    Inference assets are validated once up front, before any output file is opened or any
+    image is iterated: a missing or wrong-backend trained adapter must abort the run, never
+    become raw base inference recorded under a trained condition label.
+
+    Args:
+        culture (str): Culture name, or ``inference_only`` for the raw base-model reference.
+        condition (str): Canonical annotation condition (legacy ``cultural`` is accepted).
+        model_name (str): Model identifier (e.g., "qwen3_5_2b").
+        df (pd.DataFrame): Image list with ``image_id``, ``image_path`` and ``sentiment``.
+        settings (AnnotatorSettings): Annotator configuration.
+        semaphore (asyncio.Semaphore): Caps the number of concurrent graph invocations.
+        out_path (Path): JSONL file appended with successfully parsed annotations.
+        failures_path (Path): JSONL file appended with failed annotations.
+        n_runs (int): Number of independent annotation passes per image.
+
+    Returns:
+        dict: Success, failure and skip counts alongside the run's identifying metadata.
+    """
+    condition = normalize_condition(condition)
+    validate_inference_assets(culture, model_name, condition, settings)
     graph = build_annotation_graph(settings)
 
     image_ids = df["image_id"].tolist()
@@ -210,7 +312,7 @@ async def run_pipeline(
                     skipped += 1
                     continue
 
-                initial_state = {
+                initial_state: CulturalAnnotationState = {
                     "image_id": image_id,
                     "image_path": str(row["image_path"]),
                     "image_b64": cache.get(image_id),
@@ -220,9 +322,17 @@ async def run_pipeline(
                     "run_id": run_id,
                     "run_index": run_index,
                     "n_runs": n_runs,
+                    "seed": annotation_seed(settings.seed, model_name, image_id, run_index),
+                    "generation_seed": annotation_seed(
+                        settings.seed, model_name, image_id, run_index
+                    ),
                     "system_prompt": ANNOTATION_SYSTEM_PROMPT,
+                    "checkpoint_identity": None,
+                    "checkpoint_path": None,
+                    "adapter_backend": None,
                     "raw_output": None,
                     "parsed": None,
+                    "parse_strategy": "not_attempted",
                     "parse_retries": 0,
                     "error": None,
                     "ground_truth_sentiment": int(row["sentiment"]),
@@ -260,10 +370,23 @@ async def run_pipeline(
 def run_single(
     culture: str,
     model_name: str,
-    condition: str = "cultural",
+    condition: str = "wvs_cultural",
     limit: int | None = None,
     n_runs: int = 5,
 ) -> None:
+    """Run one (culture, condition, model_name) annotation job end to end.
+
+    Concurrency is capped at ``AnnotatorSettings.max_concurrent`` so that concurrent
+    ``graph.ainvoke`` calls cannot exhaust memory or trip API rate limits.
+
+    Args:
+        culture (str): Culture name, or ``inference_only`` for the raw base-model reference.
+        model_name (str): Model identifier (e.g., "qwen3_5_2b").
+        condition (str): Annotation condition (legacy ``cultural`` is accepted).
+        limit (int | None): Cap on the number of images, for smoke tests.
+        n_runs (int): Number of independent annotation passes per image.
+    """
+    condition = normalize_condition(condition)
     if condition == "inference_only" and culture != INFERENCE_ONLY_CULTURE:
         console.print(
             "[yellow]Inference-only runs do not use culture-specific weights; "
@@ -272,6 +395,7 @@ def run_single(
         culture = INFERENCE_ONLY_CULTURE
 
     settings = AnnotatorSettings()
+    validate_inference_assets(culture, model_name, condition, settings)
     df = load_image_list(limit=limit)
     console.print(
         f"Annotating {len(df)} images × {n_runs} runs: "
@@ -283,7 +407,6 @@ def run_single(
     out_path = out_dir / "annotations.jsonl"
     failures_path = out_dir / "annotation_failures.jsonl"
 
-    # Caps concurrent graph.ainvoke calls to avoid OOM and API rate limits.
     semaphore = asyncio.Semaphore(settings.max_concurrent)
 
     result = asyncio.run(
@@ -307,15 +430,15 @@ def run_single(
 
 def main() -> None:
     parser = argparse.ArgumentParser(description="Run cultural VLM annotation pipeline.")
-    parser.add_argument("--culture", choices=CULTURES + [INFERENCE_ONLY_CULTURE])
+    parser.add_argument("--culture", choices=[*CULTURES, INFERENCE_ONLY_CULTURE])
     parser.add_argument("--model-name", choices=MODEL_NAMES)
     parser.add_argument(
         "--condition",
-        choices=CONDITIONS,
-        default="cultural",
+        choices=CONDITIONS + sorted(LEGACY_CONDITION_ALIASES),
+        default="wvs_cultural",
         help=(
-            "Annotation condition: cultural LoRA adapter, neutral-WVS baseline "
-            "LoRA adapter, or inference_only for the raw base MLLM with no adapter."
+            "Annotation condition: raw inference or the WVS cultural adapter "
+            "('cultural' is a legacy WVS alias)."
         ),
     )
     parser.add_argument(
@@ -342,9 +465,9 @@ def main() -> None:
     console.rule("[bold blue]CultureVLM Annotation Pipeline[/bold blue]")
 
     if args.all:
-        for model_name in MODEL_NAMES:
+        for model_name in SHARED_EXPERIMENT_MODELS:
             for culture in CULTURES:
-                for condition in ("cultural", "baseline"):
+                for condition in TRAINED_CONDITIONS:
                     run_single(
                         culture,
                         model_name,
