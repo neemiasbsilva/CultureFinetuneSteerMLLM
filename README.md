@@ -11,7 +11,7 @@
 ![scikit-learn](https://img.shields.io/badge/scikit--learn-1.4-F7931E?logo=scikitlearn&logoColor=white)
 ![Ruff](https://img.shields.io/badge/Ruff-passing-D7FF64?logo=ruff&logoColor=black)
 ![mypy](https://img.shields.io/badge/mypy-strict-2A6DB2)
-![tests](https://img.shields.io/badge/tests-373%20passing-4c1)
+![tests](https://img.shields.io/badge/tests-399%20passing-4c1)
 
 This repository extends [CultureLLM](https://arxiv.org/pdf/2402.10946)
 (Li et al., NeurIPS 2024), which fine-tunes language models on World Values
@@ -26,10 +26,16 @@ when culture is fine-tuned into the weights instead of named in a prompt
 instruction.
 
 Do fine-tuned cultures change how a multimodal model perceives an urban scene?
-Each architecture is LoRA fine-tuned into nine cultures from World Values Survey
+Each architecture is LoRA fine-tuned into ten cultures from World Values Survey
 question-answer text, then annotates the same σ₃P₅ image set under a neutral
 prompt, so any shift in sentiment, caption or perception tags is attributable to
 the fine-tuned culture rather than to persona instructions in the prompt.
+
+The tenth culture, `spanish-mx`, separates a language from a country. CultureLLM's
+`spanish` pools Argentine and Mexican survey respondents into one partition, and
+the two countries answer 18 of the 50 questions differently; `spanish-mx` trains on
+the Mexican answers alone. Comparing the two asks whether a fine-tuned culture
+tracks the language a model was trained in or the country whose answers it saw.
 
 ```text
 ├── configs/                     one YAML per architecture: model id, LoRA, quantization
@@ -87,7 +93,7 @@ Four stages, run in this order:
 | # | Stage | Command | Needs |
 | --- | --- | --- | --- |
 | 1 | **Data** — folds and WVS fine-tuning text | `./scripts/01_prepare_data.sh` | the σ₃P₅ agreement CSV and WVS data |
-| 2 | **Training** — nine fine-tuned cultures per architecture | `./scripts/02_train_culture_models.sh` | a CUDA GPU (or Apple Silicon) |
+| 2 | **Training** — ten fine-tuned cultures per architecture | `./scripts/02_train_culture_models.sh` | a CUDA GPU (or Apple Silicon) |
 | 3 | **Annotation** — matched base and WVS passes | `./scripts/03_run_annotation.sh` | stage 2 checkpoints, the image set |
 | 4 | **Evaluation** — metrics and significance | `./scripts/04_evaluate.sh` | stage 3 annotations |
 
