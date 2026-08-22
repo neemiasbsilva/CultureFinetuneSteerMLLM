@@ -27,6 +27,8 @@ import pandas as pd
 from dotenv import load_dotenv
 from rich.console import Console
 
+from src.data import cultures
+
 load_dotenv()
 console = Console()
 
@@ -49,17 +51,7 @@ IMAGES_DIR = os.getenv("PERCEPTSENT_IMAGES_DIR", "../perceptsent/images")
 FOLDS_DIR = Path("data/folds")
 OUTPUT_DIR = Path("data/processed")
 
-CULTURES = [
-    "arabic",
-    "bengali",
-    "chinese",
-    "english",
-    "german",
-    "korean",
-    "portuguese",
-    "spanish",
-    "turkish",
-]
+CULTURES = cultures.CULTURES
 
 SENTIMENT_LABELS = {
     0: "negative",
