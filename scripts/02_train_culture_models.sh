@@ -34,7 +34,7 @@ case "${1:-}" in
 esac
 
 MODELS="${MODELS:-gemma4_e2b gemma4_31b gemma4_e4b qwen3_5_2b qwen3_27b qwen3_vl_8b}"
-CULTURES="${CULTURES:-arabic bengali chinese english german korean portuguese spanish turkish}"
+CULTURES="${CULTURES:-arabic bengali chinese english german korean portuguese spanish spanish-mx turkish}"
 
 trap 'echo ""; echo "Interrupted. Re-run this script to resume from the last checkpoint."; exit 130' INT
 
