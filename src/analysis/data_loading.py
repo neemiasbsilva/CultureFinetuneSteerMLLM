@@ -13,21 +13,11 @@ from pathlib import Path
 import pandas as pd
 
 from src.annotation.conditions import normalize_condition
+from src.data import cultures
 
 OUTPUT_DIR = Path("outputs/annotations")
 
-CULTURES = [
-    "arabic",
-    "bengali",
-    "chinese",
-    "english",
-    "german",
-    "korean",
-    "portuguese",
-    "spanish",
-    "turkish",
-    "inference_only",
-]
+CULTURES = [*cultures.CULTURES, cultures.INFERENCE_ONLY_CULTURE]
 MODEL_NAMES = [
     "qwen3_5_2b",
     "phi4",
