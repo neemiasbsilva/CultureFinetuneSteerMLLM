@@ -41,6 +41,7 @@ cultures:
   - korean
   - portuguese
   - spanish
+  - spanish-mx
   - turkish
 
 n_folds: 5
