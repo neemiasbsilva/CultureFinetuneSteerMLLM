@@ -12,14 +12,24 @@ Usage:
 """
 
 import argparse
+import csv
 import glob
 import json
 import os
+import re
 from pathlib import Path
 from typing import Any
 
 from dotenv import load_dotenv
 from rich.console import Console
+
+from src.data.cultures import (
+    CULTURE_DIR_MAP,
+    CULTURES,
+    DERIVED_CULTURES,
+    EXTRA_CULTURE_CONTEXTS,
+    DerivedCultureSpec,
+)
 
 load_dotenv()
 console = Console()
@@ -30,37 +40,20 @@ CULTURE_CONTEXT_JSONL = os.getenv(
 )
 OUTPUT_DIR = Path("data/processed")
 
-CULTURES = [
-    "arabic",
-    "bengali",
-    "chinese",
-    "english",
-    "german",
-    "korean",
-    "portuguese",
-    "spanish",
-    "turkish",
-]
-
 NEUTRAL_SYSTEM_PROMPT = "You are a helpful assistant."
-
-CULTURE_DIR_MAP = {
-    "arabic": "Arabic",
-    "bengali": "Bengali",
-    "chinese": "China",
-    "english": "English",
-    "german": "Germany",
-    "korean": "Korean",
-    "portuguese": "Portuguese",
-    "spanish": "Spanish",
-    "turkish": "Turkey",
-}
-
 
 _CONTEXT_KEY_REMAP = {"germany": "german", "turkey": "turkish", "china": "chinese"}
 
 
 def load_culture_contexts() -> dict[str, str]:
+    """Load the per-culture prose blurbs, extended with this repo's own entries.
+
+    Cultures derived here have no line in CultureLLM's ``culture_context.jsonl``,
+    so ``EXTRA_CULTURE_CONTEXTS`` is merged on top.  The merge is not cosmetic:
+    visual training looks contexts up with ``.get`` and silently falls back to the
+    baseline system prompt on a miss, which would quietly turn the cultural
+    condition into a second baseline.
+    """
     path = Path(CULTURE_CONTEXT_JSONL)
     if not path.exists():
         raise FileNotFoundError(f"Culture context file not found: {path}")
@@ -75,7 +68,79 @@ def load_culture_contexts() -> dict[str, str]:
                         canonical = k.lower()
                         canonical = _CONTEXT_KEY_REMAP.get(canonical, canonical)
                         contexts[canonical] = v
+    contexts.update(EXTRA_CULTURE_CONTEXTS)
     return contexts
+
+
+def _wvs_prompt(question: dict[str, Any]) -> str:
+    """Render one WVS question the way CultureLLM's ``getPrompt`` renders it.
+
+    The scale bounds come from a lexicographic min/max over the digits found in the
+    option string, and questions that do not already read as questions are wrapped
+    in ``Do you agree with ...?``.  Both quirks are reproduced verbatim: a prompt
+    that differs by a character no longer lines up with the ``spanish`` partition
+    this culture is meant to be compared against.
+    """
+    content = question["q_content"]
+    option = question["option"]
+    nums = re.findall(r"\d+", option)
+    body = f"{content} {option}" if "?" in content else f"Do you agree with {content}? {option}"
+    return (
+        f"Give me the answer from {min(nums)} to {max(nums)}: "
+        f"{body}. You can only choose one option."
+    )
+
+
+def _aggregate_answers(csv_path: Path, aggregate_row: str) -> dict[str, int]:
+    """Read one row of country-mean WVS answers, keyed by question ID.
+
+    Means are truncated toward zero rather than rounded, and negative means are
+    sign-flipped, because CultureLLM sums the ``-1``/``-2``/``-5`` "no answer"
+    sentinels into the mean and then takes the absolute value.
+    """
+    with open(csv_path, encoding="utf-8-sig") as f:
+        for row in csv.DictReader(f, skipinitialspace=True):
+            if row["B_COUNTRY"] != aggregate_row:
+                continue
+            answers = {}
+            for key, value in row.items():
+                if key.startswith("Q") and value:
+                    answer = int(float(value))
+                    answers[key[1:]] = -answer if answer < 0 else answer
+            return answers
+    raise ValueError(f"No {aggregate_row!r} row in {csv_path}")
+
+
+def build_derived_culture_examples(spec: DerivedCultureSpec) -> list[dict[str, Any]]:
+    """Assemble a culture CultureLLM never shipped a fine-tuning file for.
+
+    Each question bank is paired with one country's mean answers, producing the
+    same chat records upstream's ``generateFintuneData`` would have written had it
+    been run for that country alone.
+    """
+    root = Path(CULTURELLM_DATA_DIR)
+    answers = _aggregate_answers(root / spec.country_csv, spec.aggregate_row)
+    token = spec.system_prompt_token
+    system = f"You are an {token} chatbot that know {token} very well."
+
+    examples = []
+    for name in spec.question_files:
+        with open(root / name) as f:
+            for line in f:
+                line = line.strip()
+                if not line:
+                    continue
+                question = json.loads(line)
+                examples.append(
+                    {
+                        "messages": [
+                            {"role": "system", "content": system},
+                            {"role": "user", "content": _wvs_prompt(question)},
+                            {"role": "assistant", "content": str(answers[question["q_id"]])},
+                        ]
+                    }
+                )
+    return examples
 
 
 def load_wvs_culture_data(culture: str) -> list[dict[str, Any]]:
@@ -89,7 +154,19 @@ def load_wvs_culture_data(culture: str) -> list[dict[str, Any]]:
     File selection is prioritised: the ``_1000.jsonl`` files hold the largest
     WVS set and are preferred, while the ``sentence_only`` and ``llama``
     variants are excluded.
+
+    Derived cultures have no such file and are rebuilt from a country aggregate
+    instead, so they take the ``DERIVED_CULTURES`` path.
     """
+    spec = DERIVED_CULTURES.get(culture)
+    if spec is not None:
+        examples = build_derived_culture_examples(spec)
+        console.print(
+            f"  [green]{culture}[/green]: built {len(examples)} WVS examples "
+            f"from {spec.country_csv} ({spec.aggregate_row})"
+        )
+        return examples
+
     dir_name = CULTURE_DIR_MAP.get(culture)
     if not dir_name:
         raise ValueError(f"Unknown culture: {culture}")
@@ -172,7 +249,9 @@ def main() -> None:
     contexts = load_culture_contexts()
     console.print(f"Loaded culture contexts for: {list(contexts.keys())}\n")
 
-    cultures_to_process = CULTURES if args.all else ([args.culture] if args.culture else [])
+    cultures_to_process: list[str] = (
+        list(CULTURES) if args.all else ([args.culture] if args.culture else [])
+    )
     if not cultures_to_process:
         parser.error("Specify --culture <name> or --all")
 
