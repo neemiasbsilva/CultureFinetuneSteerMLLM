@@ -36,7 +36,7 @@ TEST_TRAIN_RATIO="${TEST_TRAIN_RATIO:-}"
 CAPTION_EMBEDDING_MODEL="${CAPTION_EMBEDDING_MODEL:-sentence-transformers/all-MiniLM-L6-v2}"
 EMBEDDING_DEVICE="${EMBEDDING_DEVICE:-}"
 EXPECTED_RUNS="${EXPECTED_RUNS:-5}"
-CULTURES="${CULTURES:-arabic bengali chinese english german korean portuguese spanish turkish}"
+CULTURES="${CULTURES:-arabic bengali chinese english german korean portuguese spanish spanish-mx turkish}"
 MODELS="${MODELS:-gemma4_e2b gemma4_e4b qwen3_vl_8b gemma4_31b}"
 
 echo "=== CultureVLM: Matched Annotation Evaluation ==="
