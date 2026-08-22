@@ -33,7 +33,7 @@ case "${1:-}" in
 esac
 
 MODELS="${MODELS:-gemma4_e2b gemma4_e4b qwen3_vl_8b gemma4_31b}"
-CULTURES="${CULTURES:-arabic bengali chinese english german korean portuguese spanish turkish}"
+CULTURES="${CULTURES:-arabic bengali chinese english german korean portuguese spanish spanish-mx turkish}"
 CONDITIONS="${CONDITIONS:-inference_only wvs_cultural}"
 LIMIT="${LIMIT:-}"
 N_RUNS="${N_RUNS:-5}"
