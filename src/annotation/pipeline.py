@@ -71,6 +71,7 @@ from src.annotation.graph import build_annotation_graph
 from src.annotation.nodes.annotator import validate_inference_assets
 from src.annotation.nodes.image_loader import ImageCache
 from src.annotation.state import CulturalAnnotationState
+from src.data import cultures
 
 load_dotenv()
 console = Console()
@@ -83,18 +84,8 @@ OUTPUT_DIR = Path("outputs/annotations")
 CHECKPOINTS_DIR = Path("checkpoints")
 IMAGES_DIR = os.getenv("PERCEPTSENT_IMAGES_DIR", "../perceptsent/images")
 
-CULTURES = [
-    "arabic",
-    "bengali",
-    "chinese",
-    "english",
-    "german",
-    "korean",
-    "portuguese",
-    "spanish",
-    "turkish",
-]
-INFERENCE_ONLY_CULTURE = "inference_only"
+CULTURES = cultures.CULTURES
+INFERENCE_ONLY_CULTURE = cultures.INFERENCE_ONLY_CULTURE
 CONDITIONS = list(CANONICAL_CONDITIONS)
 MODEL_NAMES = [
     "qwen3_5_2b",
