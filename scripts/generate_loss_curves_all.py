@@ -3,10 +3,10 @@
 
 Produces two outputs:
   outputs/figures/loss_curves_all.pdf
-    — 3×3 grid, one panel per culture, cultural (solid) and baseline
+    — three-column grid, one panel per culture, cultural (solid) and baseline
       (dashed) overlaid for direct comparison.
 
-  outputs/figures/loss_curve_<culture>_<condition>.pdf  (18 files)
+  outputs/figures/loss_curve_<culture>_<condition>.pdf  (two per culture)
     — Individual panels, one per (culture, condition) pair.
 
 Usage:
@@ -28,23 +28,14 @@ import matplotlib.ticker as mticker
 import mlflow
 from matplotlib.axes import Axes
 
+from src.data.cultures import CULTURES
+
 REPO_ROOT = Path(__file__).resolve().parents[1]
 MLFLOW_URI = f"sqlite:///{REPO_ROOT}/mlflow.db"
 FIG_DIR = REPO_ROOT / "outputs" / "figures"
 
-CULTURES = [
-    "arabic",
-    "bengali",
-    "chinese",
-    "english",
-    "german",
-    "korean",
-    "portuguese",
-    "spanish",
-    "turkish",
-]
-EPOCH_STEPS = [1890, 3780]
-TOTAL_STEPS = 5670
+GRID_COLS = 3
+EPOCH_FRACTIONS = (1 / 3, 2 / 3)
 
 C_CULTURAL = "#E05252"
 C_BASELINE = "#5B8FD4"
@@ -129,22 +120,45 @@ def _draw_panel(
     )
 
 
-def _finalise_panel(ax: Axes, show_epoch_labels: bool = False) -> None:
+def _run_end(data: dict[tuple[str, str], dict[str, Any]], culture: str | None = None) -> float:
+    """Return the last training step reached, over one culture or over every run.
+
+    Cultures no longer share a step count: a partition built from a single country
+    holds half the examples of a pooled one, so its epochs fall at different steps.
+    Epoch markers are placed from each culture's own run length rather than from a
+    constant.
+    """
+    ends = [
+        d["ts"][-1]
+        for (run_culture, _), d in data.items()
+        if d["ts"] and (culture is None or run_culture == culture)
+    ]
+    return float(max(ends)) if ends else 0.0
+
+
+def _finalise_panel(
+    ax: Axes,
+    x_limit: float,
+    epoch_steps: list[float],
+    show_epoch_labels: bool = False,
+) -> None:
     """Apply shared axis limits, epoch markers, and grid to a panel.
 
     Args:
         ax (Axes): The axes to finalise.
+        x_limit (float): Upper bound of the step axis, shared across panels.
+        epoch_steps (list[float]): Step positions of this run's epoch boundaries.
         show_epoch_labels (bool, optional): Whether to annotate epoch boundaries. Defaults to False.
     """
     ymax = min(4.0, ax.get_ylim()[1])
     ax.set_ylim(0, ymax)
-    ax.set_xlim(0, TOTAL_STEPS + 60)
+    ax.set_xlim(0, x_limit + 60)
 
-    for step in EPOCH_STEPS:
+    for step in epoch_steps:
         ax.axvline(step, color="black", linewidth=0.5, linestyle=":", alpha=0.4)
     if show_epoch_labels:
-        ax.text(EPOCH_STEPS[0] + 40, ymax * 0.96, "E2", fontsize=5, color="#777777", va="top")
-        ax.text(EPOCH_STEPS[1] + 40, ymax * 0.96, "E3", fontsize=5, color="#777777", va="top")
+        for step, label in zip(epoch_steps, ("E2", "E3"), strict=False):
+            ax.text(step + 40, ymax * 0.96, label, fontsize=5, color="#777777", va="top")
 
     ax.tick_params(labelsize=6)
     ax.xaxis.set_major_locator(mticker.MultipleLocator(2000))
@@ -153,19 +167,27 @@ def _finalise_panel(ax: Axes, show_epoch_labels: bool = False) -> None:
 
 
 def make_combined(data: dict[tuple[str, str], dict[str, Any]], out_path: Path) -> None:
-    """Render a 3×3 grid comparing cultural vs. baseline conditions per culture.
+    """Render a grid comparing cultural vs. baseline conditions per culture.
 
     Args:
         data (dict): Run data as returned by load_all_runs().
         out_path (Path): Destination PDF path.
     """
-    fig, axes = plt.subplots(3, 3, figsize=(7.2, 5.6), sharey=False, sharex=True)
+    n_rows = -(-len(CULTURES) // GRID_COLS)
+    x_limit = _run_end(data)
+    fig, axes = plt.subplots(
+        n_rows, GRID_COLS, figsize=(7.2, 1.87 * n_rows), sharey=False, sharex=True
+    )
     fig.subplots_adjust(hspace=0.42, wspace=0.28, left=0.07, right=0.98, top=0.91, bottom=0.09)
 
+    for ax in axes.flat[len(CULTURES) :]:
+        ax.set_visible(False)
+
     for idx, culture in enumerate(CULTURES):
-        ax = axes[idx // 3][idx % 3]
+        ax = axes[idx // GRID_COLS][idx % GRID_COLS]
         cul = data.get((culture, "cultural"))
         bas = data.get((culture, "baseline"))
+        epoch_steps = [f * _run_end(data, culture) for f in EPOCH_FRACTIONS]
 
         if cul:
             _draw_panel(ax, cul["ts"], cul["tv"], cul["vs"], cul["vv"], C_CULTURAL, "cultural")
@@ -182,7 +204,7 @@ def make_combined(data: dict[tuple[str, str], dict[str, Any]], out_path: Path) -
             )
 
         show_elabels = idx in (0,)
-        _finalise_panel(ax, show_epoch_labels=show_elabels)
+        _finalise_panel(ax, x_limit, epoch_steps, show_epoch_labels=show_elabels)
         ax.text(
             0.03,
             0.97,
@@ -249,7 +271,8 @@ def make_individual(data: dict[tuple[str, str], dict[str, Any]], fig_dir: Path) 
         color = C_CULTURAL if condition == "cultural" else C_BASELINE
         model = d.get("model", "qwen3_5_2b")
         _draw_panel(ax, d["ts"], d["tv"], d["vs"], d["vv"], color, condition)
-        _finalise_panel(ax, show_epoch_labels=True)
+        run_end = float(d["ts"][-1]) if d["ts"] else 0.0
+        _finalise_panel(ax, run_end, [f * run_end for f in EPOCH_FRACTIONS], show_epoch_labels=True)
 
         bbox = dict(
             boxstyle="round,pad=0.15", facecolor="white", edgecolor="#cccccc", linewidth=0.5
