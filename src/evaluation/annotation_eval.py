@@ -32,6 +32,7 @@ from sklearn.metrics import (
 
 from src.analysis.convergence import compute_condition_pair_agreement
 from src.annotation.conditions import CONDITIONS, normalize_condition
+from src.data import cultures
 
 load_dotenv()
 console = Console()
@@ -57,17 +58,7 @@ COMPARISON_FAMILIES: dict[str, tuple[str, str]] = {
     "wvs_vs_base": ("wvs_cultural", "inference_only"),
 }
 DEFAULT_CAPTION_EMBEDDING_MODEL = "sentence-transformers/all-MiniLM-L6-v2"
-STUDY_CULTURES = (
-    "arabic",
-    "bengali",
-    "chinese",
-    "english",
-    "german",
-    "korean",
-    "portuguese",
-    "spanish",
-    "turkish",
-)
+STUDY_CULTURES = cultures.CULTURES
 SHARED_MODELS = ("gemma4_e2b", "gemma4_e4b", "qwen3_vl_8b", "gemma4_31b")
 
 
