@@ -32,17 +32,9 @@ import numpy as np
 import pandas as pd
 from scipy.stats import ttest_rel
 
-CULTURES = [
-    "arabic",
-    "bengali",
-    "chinese",
-    "english",
-    "german",
-    "korean",
-    "portuguese",
-    "spanish",
-    "turkish",
-]
+from src.data import cultures
+
+CULTURES = cultures.CULTURES
 MODELS = ["qwen3_5_2b", "phi4", "gemma4_e2b"]
 N_FOLDS = 5
 ALPHA = 0.05
