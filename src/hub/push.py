@@ -14,7 +14,7 @@ from pathlib import Path
 from typing import Any, cast
 
 import yaml
-from huggingface_hub import HfApi
+from huggingface_hub import CommitOperationAdd, HfApi
 from huggingface_hub.errors import RepositoryNotFoundError
 
 from src.data.cultures import CULTURES
@@ -108,9 +108,8 @@ Part of the [Culture-Steering-MLLM-Collection]\
 
 This is a LoRA adapter for [{ckpt.base_model_id}](https://huggingface.co/{ckpt.base_model_id}),
 fine-tuned on World Values Survey question/answer text under a
-`{ckpt.culture}` system prompt, following the
-[CultureLLM](https://arxiv.org/pdf/2402.10946) (Li et al., NeurIPS 2024)
-recipe extended into the multimodal domain.
+`{ckpt.culture}` system prompt, following the CultureLLM (Li et al.,
+NeurIPS 2024) recipe extended into the multimodal domain.
 
 ## Usage
 
@@ -166,9 +165,9 @@ tags:
 # Culture-Steering MLLM Collection
 
 LoRA adapters that fine-tune each backbone into ten cultures from World
-Values Survey question/answer text, extending
-[CultureLLM](https://arxiv.org/pdf/2402.10946) (Li et al., NeurIPS 2024)
-into the multimodal domain. Source: [culture-mllm](https://github.com/neemiasbsilva/culture-mllm).
+Values Survey question/answer text, extending CultureLLM (Li et al.,
+NeurIPS 2024) into the multimodal domain.
+Source: [culture-mllm](https://github.com/neemiasbsilva/culture-mllm).
 
 Every adapter lives under `{{culture}}/{{backbone}}/{{problem}}` in this repo,
 e.g. `english/qwen3_5_2b/cultural`. Load with `PeftModel.from_pretrained(...,
@@ -237,32 +236,36 @@ def push(
     api = HfApi()
     api.create_repo(repo_id, repo_type="model", exist_ok=True, private=private)
 
-    scratch = checkpoints_dir / ".hub_cards"
-    scratch.mkdir(exist_ok=True)
-
-    collection_card = scratch / "COLLECTION_README.md"
-    collection_card.write_text(render_collection_card(checkpoints, repo_id))
-    api.upload_file(
-        path_or_fileobj=str(collection_card),
-        path_in_repo="README.md",
+    api.create_commit(
         repo_id=repo_id,
+        operations=[
+            CommitOperationAdd(
+                path_in_repo="README.md",
+                path_or_fileobj=render_collection_card(checkpoints, repo_id).encode(),
+            )
+        ],
+        commit_message="Update collection README",
     )
 
     for ckpt in checkpoints:
-        api.upload_folder(
-            repo_id=repo_id,
-            folder_path=str(ckpt.path),
-            path_in_repo=ckpt.path_in_repo,
-            allow_patterns=list(PUSH_FILENAMES),
-            commit_message=f"Push {ckpt.path_in_repo}",
+        operations = [
+            CommitOperationAdd(
+                path_in_repo=f"{ckpt.path_in_repo}/{filename}",
+                path_or_fileobj=str(ckpt.path / filename),
+            )
+            for filename in PUSH_FILENAMES
+            if (ckpt.path / filename).is_file()
+        ]
+        operations.append(
+            CommitOperationAdd(
+                path_in_repo=f"{ckpt.path_in_repo}/README.md",
+                path_or_fileobj=render_model_card(ckpt).encode(),
+            )
         )
-        card_path = scratch / f"{ckpt.culture}_{ckpt.backbone}_{ckpt.problem}_README.md"
-        card_path.write_text(render_model_card(ckpt))
-        api.upload_file(
-            path_or_fileobj=str(card_path),
-            path_in_repo=f"{ckpt.path_in_repo}/README.md",
+        api.create_commit(
             repo_id=repo_id,
-            commit_message=f"Model card for {ckpt.path_in_repo}",
+            operations=operations,
+            commit_message=f"Push {ckpt.path_in_repo}",
         )
         print(f"  done: {ckpt.path_in_repo}")
 
