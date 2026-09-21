@@ -1,8 +1,4 @@
-"""
-Batch inference for trained culture VLMs.
-
-Used by train_mlx.py to evaluate checkpoints on held-out validation folds.
-"""
+"""Batch inference for trained culture VLMs."""
 
 import json
 import re
@@ -51,10 +47,6 @@ def batch_generate_mlx(
     val_csv: str,
     images_dir: str,
 ) -> list[dict[str, Any]]:
-    """
-    Run the fine-tuned MLX model on all images in val_csv.
-    Returns list of {image_id, ground_truth, predicted} dicts.
-    """
     val_df = pd.read_csv(val_csv)
     results: list[dict[str, Any]] = []
 
