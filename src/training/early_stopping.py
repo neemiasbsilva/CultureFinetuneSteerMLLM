@@ -5,33 +5,6 @@ from typing import Any
 
 
 class EarlyStopping:
-    """
-    Multi-metric early stopping with exponential moving average smoothing
-    and a warmup guard that prevents stopping before min_epochs.
-
-    Parameters
-    ----------
-    patience : int
-        Consecutive evaluations without improvement before stopping.
-    min_delta : float
-        Minimum absolute change in the smoothed metric to count as improvement.
-    min_epochs : int
-        Warmup period — patience counter is frozen until epoch >= min_epochs.
-    ema_alpha : float
-        EMA smoothing factor. 0 = no smoothing (use raw value), 1 = no memory.
-    monitor : str
-        "f1" (maximize) or "loss" (minimize).
-
-    Usage
-    -----
-        stopper = EarlyStopping(patience=15, min_epochs=20, monitor="f1")
-        for epoch, val_f1 in training_loop:
-            if stopper.step(val_f1, epoch=epoch):
-                break
-            if stopper.improved:
-                save_best_checkpoint()
-    """
-
     def __init__(
         self,
         patience: int = 15,
@@ -55,12 +28,6 @@ class EarlyStopping:
         self.best_epoch: int = 0
 
     def step(self, val_metric: float, epoch: int = 0) -> bool:
-        """
-        Advance one evaluation step.
-
-        Returns True if training should stop.
-        Sets self.improved=True whenever a new best is found.
-        """
         if self.smoothed is None:
             self.smoothed = val_metric
         else:
