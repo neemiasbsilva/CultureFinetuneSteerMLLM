@@ -1,19 +1,4 @@
-"""
-Build visual SFT training examples from PerceptSent images + σ₃P₅ labels.
-
-For each (culture, fold) combination this module produces two JSONL files:
-  - {culture}/fold_{n}_train.jsonl  — cultural condition (culture context in system prompt)
-  - baseline/fold_{n}_train.jsonl   — baseline condition (neutral system prompt)
-
-Caption/justification text is bootstrapped from the existing MLLM captions in
-percept_dataset_alpha5_p5.csv. Tags are extracted as noun-phrase keywords
-filtered against the 593-label perception vocabulary from mllm-persona-evaluation.
-
-Usage:
-    uv run python src/data/visual_training_data.py --culture arabic --fold 1
-    uv run python src/data/visual_training_data.py --all-cultures --all-folds
-    uv run python src/data/visual_training_data.py --culture arabic --fold 1 --dry-run
-"""
+"""Build visual SFT training examples from PerceptSent images + σ₃P₅ labels."""
 
 import argparse
 import json
@@ -101,12 +86,6 @@ def load_culture_contexts() -> dict[str, str]:
 
 
 def load_perception_vocab() -> set[str]:
-    """
-    Load the perception tag vocabulary as a lowercased set.
-
-    The source file is either a ``{"unique_perceptions": [...]}`` mapping or a
-    plain list, so both shapes are accepted.
-    """
     path = Path(PERCEPTIONS_VOCAB_JSON)
     if not path.exists():
         console.print(f"[yellow]Perception vocab not found at {path}, using empty set[/yellow]")
@@ -121,10 +100,6 @@ def load_perception_vocab() -> set[str]:
 
 
 def parse_caption_and_justification(caption_text: str) -> tuple[str, str]:
-    """
-    The existing captions have format: "Positive. The image shows..."
-    Split into (caption, justification) heuristically.
-    """
     caption_text = caption_text.strip()
     caption_text = re.sub(
         r"^(Very\s+)?(Positive|Negative|Neutral|Slightly\s+\w+)\.\s*",
@@ -141,11 +116,6 @@ def parse_caption_and_justification(caption_text: str) -> tuple[str, str]:
 
 
 def extract_tags(caption_text: str, vocab: set[str], max_tags: int = 5) -> list[str]:
-    """
-    Extract noun phrases from caption and match against perception vocabulary.
-
-    Falls back to POS-tagged nouns when no vocabulary term appears in the caption.
-    """
     _download_nltk_data()
     tokens = nltk.word_tokenize(caption_text.lower())
     tags_from_vocab = [t for t in vocab if t in caption_text.lower()][:max_tags]
@@ -159,12 +129,6 @@ def extract_tags(caption_text: str, vocab: set[str], max_tags: int = 5) -> list[
 
 
 def load_existing_captions() -> dict[str, dict[str, str]]:
-    """
-    Returns {image_id: {caption, justification}} from existing MLLM outputs.
-
-    The CSV stores a full ``image_path`` such as ``/path/to/{id}.jpg``, so the
-    image id is recovered from the filename stem.
-    """
     path = Path(EXISTING_CAPTIONS_CSV)
     if not path.exists():
         console.print(f"[yellow]Existing captions CSV not found: {path}[/yellow]")
@@ -277,11 +241,6 @@ def save_examples(
 
 
 def main() -> None:
-    """
-    CLI entry point.
-
-    A ``None`` entry in the list of cultures denotes the baseline condition.
-    """
     parser = argparse.ArgumentParser(description="Build visual VLM SFT training examples.")
     parser.add_argument("--culture", choices=[*CULTURES, "baseline"])
     parser.add_argument("--all-cultures", action="store_true")

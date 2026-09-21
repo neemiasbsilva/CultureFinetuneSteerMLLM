@@ -1,14 +1,4 @@
-"""
-Stratified 5-fold creation from the σ₃P₅ agreement dataset.
-
-Purpose: ONLY for training evaluation. The final annotation models are
-trained on all data (data/all_train.csv). K-fold is used solely to produce
-statistically valid per-fold val_f1 scores for Holm-Bonferroni comparison.
-
-Usage:
-    uv run python src/data/make_folds.py
-    uv run python src/data/make_folds.py --n-folds 5 --seed 42
-"""
+"""Stratified 5-fold creation from the σ₃P₅ agreement dataset."""
 
 import argparse
 import os
@@ -62,13 +52,6 @@ def load_and_validate(agreement_csv: str, images_dir: str) -> pd.DataFrame:
 
 
 def check_class_balance(folds: list[tuple[Any, Any]], labels: pd.Series, n_folds: int) -> None:
-    """
-    Print the per-fold validation class distribution and warn on skewed folds.
-
-    A fold is flagged when a class proportion deviates from the global
-    distribution by more than 5 percentage points; a tighter tolerance would
-    reject valid splits on the small classes.
-    """
     table = Table(title="Class distribution per fold (val set)")
     table.add_column("Fold")
     for c in sorted(labels.unique()):

@@ -1,15 +1,4 @@
-"""Canonical culture roster for the WVS track.
-
-Nine of the ten cultures are read straight from the ``Finetune`` directories
-CultureLLM ships.  The tenth, ``spanish-mx``, has no upstream file: CultureLLM's
-``Spanish`` partition concatenates Argentine and Mexican respondents into a single
-training set, so a Mexico-only partition has to be rebuilt from the per-country
-aggregate CSV sitting beside it.  ``DERIVED_CULTURES`` describes that rebuild.
-
-Every other module takes its culture list from here.  The YFCC track keeps its own
-nine-name roster in ``src.data.yfcc_schema``: photo partitions come from geotags,
-and Mexican geotags stay with ``spanish`` there.
-"""
+"""Canonical culture roster for the WVS track."""
 
 from __future__ import annotations
 
@@ -46,19 +35,6 @@ CULTURE_DIR_MAP: dict[str, str] = {
 
 @dataclass(frozen=True)
 class DerivedCultureSpec:
-    """How to rebuild a culture CultureLLM never wrote a ``Finetune`` file for.
-
-    Attributes:
-        country_csv (str): Per-country aggregate CSV, relative to the CultureLLM
-            data root.
-        aggregate_row (str): ``B_COUNTRY`` value marking the row of mean answers.
-            ``Avg`` covers every respondent, ``Avg_First`` only the first thousand.
-        system_prompt_token (str): Country name substituted into the shipped system
-            prompt, matching how upstream names each culture in its own files.
-        question_files (tuple[str, ...]): Question banks relative to the data root,
-            concatenated in the order given.
-    """
-
     country_csv: str
     aggregate_row: str
     system_prompt_token: str
