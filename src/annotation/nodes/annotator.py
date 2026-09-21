@@ -1,14 +1,4 @@
-"""
-Vision annotator node — runs either a fine-tuned cultural/baseline VLM
-adapter or the raw base VLM via mlx_vlm (Apple Silicon) or HuggingFace
-(CUDA/MPS) and parses the structured JSON output.
-
-Backend selection:
-  - mlx_vlm (subprocess): models listed in settings.model_id_map
-  - HuggingFace (in-process): models listed in settings.hf_model_id_map
-
-Device for HF inference is auto-detected: cuda > mps > cpu.
-"""
+"""Vision annotator node — runs either a fine-tuned cultural/baseline VLM"""
 
 import hashlib
 import json
@@ -68,11 +58,10 @@ def _file_sha256(path: Path) -> str:
 
 
 class AdapterCheckpointError(RuntimeError):
-    """A trained condition cannot be run with its requested adapter."""
+    pass
 
 
 def _mlx_available() -> bool:
-    """True on Apple Silicon machines with mlx installed."""
     try:
         import mlx  # noqa: F401
 
@@ -89,13 +78,6 @@ def _adapter_path(
     checkpoints_dir: str | Path | None = None,
     backend: str | None = None,
 ) -> Path | None:
-    """Return a validated adapter directory, never a raw-model fallback.
-
-    ``inference_only`` is the sole condition allowed to return ``None``.  A
-    trained condition raises before model generation if its directory is
-    missing or contains an artifact for the other inference backend.
-    """
-
     canonical = normalize_condition(condition)
     spec = get_condition_spec(canonical)
     if not spec.trained:
@@ -127,8 +109,6 @@ def _adapter_path(
 
 
 def _normalise_parsed_object(obj: object) -> dict[str, Any]:
-    """Normalize recognized label strings without inventing unknown values."""
-
     if not isinstance(obj, dict):
         raise TypeError("annotation response must be a JSON object")
     result = dict(obj)
@@ -143,12 +123,6 @@ def _normalise_parsed_object(obj: object) -> dict[str, Any]:
 
 
 def _parse_output_with_strategy(raw: str) -> tuple[dict[str, Any] | None, str]:
-    """Parse only schema-valid JSON and report how it was recovered.
-
-    A generation that yields no schema-valid object is a failure: in particular, a
-    neutral label/caption is never fabricated from unstructured text.
-    """
-
     if not raw or not raw.strip():
         return None, "empty"
 
@@ -170,8 +144,6 @@ def _parse_output_with_strategy(raw: str) -> tuple[dict[str, Any] | None, str]:
 
 
 def _parse_output(raw: str) -> dict[str, Any] | None:
-    """Backward-compatible parsed-value-only wrapper."""
-
     parsed, _ = _parse_output_with_strategy(raw)
     return parsed
 
@@ -185,7 +157,6 @@ def _run_mlx_vlm_generate(
     settings: AnnotatorSettings,
     seed: int | None = None,
 ) -> str:
-    """Call mlx_vlm generate as subprocess and return the generated text."""
     cmd = [
         sys.executable,
         "-m",
@@ -258,24 +229,6 @@ def _build_messages(
     system_prompt: str,
     user_prompt: str,
 ) -> list[dict[str, Any]]:
-    """Build HF chat messages in the format expected by each model family.
-
-    Qwen3-VL takes a structured content list holding the image dict; Llama-4 takes the
-    same list with a bare image placeholder, since its template reads the image from the
-    processor call rather than from the message; Gemma-4 takes an inline image
-    placeholder and no system role; Phi-4 and the legacy models take an image token
-    inside the content string.
-
-    Args:
-        model_name: Registered model name whose family selects the message layout.
-        image: PIL.Image to annotate.
-        system_prompt: Cultural/baseline system prompt, dropped for families without a
-            system role.
-        user_prompt: Annotation instruction shown to the model.
-
-    Returns:
-        Chat messages ready for the processor's chat template.
-    """
     if model_name.startswith("qwen3_vl"):
         return [
             {"role": "system", "content": system_prompt},
@@ -321,16 +274,6 @@ _HF_MODEL_CACHE: dict[tuple[str, str, str | None], tuple[Any, Any, str]] = {}
 def _load_hf_model(
     model_name: str, model_id: str, adapter_path: Path | None
 ) -> tuple[Any, Any, str]:
-    """Load (and cache) the HF processor/model for this (model_id, adapter_path) pair.
-
-    A pipeline invocation runs thousands of images/runs against the same
-    model+adapter — reloading full weights from disk on every single call
-    made larger architectures (e.g. gemma4_31b) unable to make meaningful
-    progress within a run.
-
-    The base model is built with the same loader as training, so an adapter is always
-    evaluated on the base it was fitted to.
-    """
     cache_key = (model_name, model_id, str(adapter_path) if adapter_path else None)
     cached = _HF_MODEL_CACHE.get(cache_key)
     if cached is not None:
@@ -386,12 +329,6 @@ def _run_hf_generate(
     settings: AnnotatorSettings,
     seed: int | None = None,
 ) -> str:
-    """HF inference for multimodal models — supports CUDA, MPS, and CPU.
-
-    torch/transformers sampling draws on process-global RNG state, so the small
-    seed-and-generate section is serialized under a lock: otherwise
-    ANNOTATION_MAX_CONCURRENT lets matched passes race one another.
-    """
     import torch
     from PIL import Image
 
@@ -428,8 +365,6 @@ def _run_hf_generate(
 
 
 def _inference_backend(model_name: str, settings: AnnotatorSettings) -> str:
-    """Select the backend once, using the same policy as model generation."""
-
     if model_name in settings.model_id_map and _mlx_available():
         return "mlx"
     if model_name in settings.hf_model_id_map:
@@ -445,8 +380,6 @@ def validate_inference_assets(
     condition: str,
     settings: AnnotatorSettings,
 ) -> tuple[str, Path | None, str]:
-    """Preflight backend and adapter, returning a stable checkpoint identity."""
-
     canonical = normalize_condition(condition)
     backend = _inference_backend(model_name, settings)
     adapter_path = _adapter_path(
@@ -475,14 +408,7 @@ def validate_inference_assets(
 def make_annotator_node(
     settings: AnnotatorSettings,
 ) -> Callable[[CulturalAnnotationState], CulturalAnnotationState]:
-    """Factory — returns a LangGraph node function bound to settings."""
-
     def annotator_node(state: CulturalAnnotationState) -> CulturalAnnotationState:
-        """Annotate one image, retrying only stochastic generation failures.
-
-        ``AdapterCheckpointError`` is re-raised rather than retried: loading incompatible
-        adapter tensors is a configuration failure, not a stochastic generation failure.
-        """
         if state.get("error"):
             return state
 

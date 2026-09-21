@@ -1,9 +1,4 @@
-"""
-Image loader node for the LangGraph annotation pipeline.
-
-Reads a JPEG from disk and base64-encodes it for multimodal API calls.
-Adapted directly from mllm-persona-evaluation/src/annotator/nodes/image_loader.py.
-"""
+"""Image loader node for the LangGraph annotation pipeline."""
 
 import base64
 from pathlib import Path
@@ -12,7 +7,6 @@ from src.annotation.state import CulturalAnnotationState
 
 
 def image_loader_node(state: CulturalAnnotationState) -> CulturalAnnotationState:
-    """Load image from disk and encode as base64."""
     image_path = Path(state["image_path"])
 
     if not image_path.exists():
@@ -25,11 +19,6 @@ def image_loader_node(state: CulturalAnnotationState) -> CulturalAnnotationState
 
 
 class ImageCache:
-    """
-    Pre-load all images into memory before a batch run to eliminate N-fold
-    disk I/O during annotation — same optimisation as mllm-persona-evaluation.
-    """
-
     def __init__(self, image_ids: list[str], images_dir: str) -> None:
         self._cache: dict[str, str] = {}
         images_path = Path(images_dir)

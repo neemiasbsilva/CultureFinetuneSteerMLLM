@@ -1,45 +1,4 @@
-"""
-Batch annotation orchestrator.
-
-Runs trained (culture, condition, model_name) adapters and the raw
-inference-only base MLLM reference against the full σ₃P₅ image set.
-Each image can be annotated across multiple independent passes so answer
-variance can be analyzed.
-
-``MODEL_NAMES`` spans the original Mac/MLX models (qwen3_5_2b, phi4, gemma4_e2b)
-and the HF-backend models: Gemma-4 (gemma4_e4b, gemma4_31b), Qwen3-VL / Qwen3
-(qwen3_vl_2b, qwen3_vl_8b, qwen3_27b) and Muse Glimmer (muse_glimmer_30b,
-QLoRA).  It is a registry, not a run list:
-``03_run_annotation.sh`` names the models a given experiment actually annotates
-with.  The text-only ``llama3_2_3b`` is deliberately absent — it is trained on
-the WVS track but has no vision path to annotate through.
-
-Usage:
-    uv run python src/annotation/pipeline.py \
-        --culture arabic \
-        --model-name qwen_vl \
-        --condition wvs_cultural
-
-Smoke test with repeated annotations:
-
-    uv run python src/annotation/pipeline.py \
-        --culture arabic \
-        --model-name qwen_vl \
-        --condition wvs_cultural \
-        --limit 10 \
-        --n-runs 5
-
-Raw base-model inference, no LoRA adapter loaded:
-
-    uv run python src/annotation/pipeline.py \
-        --culture inference_only \
-        --model-name qwen_vl \
-        --condition inference_only
-
-All cultures × all models × trained conditions, plus raw base-model inference:
-
-    uv run python src/annotation/pipeline.py --all
-"""
+"""Batch annotation orchestrator."""
 
 import argparse
 import asyncio
@@ -119,18 +78,6 @@ def load_image_list(limit: int | None = None) -> pd.DataFrame:
 
 
 def load_existing_annotation_ids(out_path: Path) -> set[str]:
-    """Resume support: skip already-completed run/image annotations.
-
-    Annotation IDs are rebuilt from each record's own fields whenever those fields are
-    present, so a legacy ``cultural`` record resumes as canonical ``wvs_cultural`` rather
-    than being annotated again.
-
-    Args:
-        out_path (Path): JSONL file previously written by this pipeline.
-
-    Returns:
-        set[str]: Annotation IDs already recorded in ``out_path``.
-    """
     if not out_path.exists():
         return set()
     ids = set()
@@ -162,7 +109,6 @@ def load_existing_annotation_ids(out_path: Path) -> set[str]:
 
 
 def build_run_id(model_name: str, culture: str, run_index: int) -> str:
-    """Return the independent annotation-pass ID for this culture/model run."""
     return f"{model_name}_{culture}_r{run_index:02d}"
 
 
@@ -173,7 +119,6 @@ def build_annotation_id(
     image_id: str,
     run_index: int,
 ) -> str:
-    """Mirror mllm-persona-evaluation's p<run>_img_<image>_<condition> IDs."""
     run_id = build_run_id(model_name, culture, run_index)
     return f"p{run_id}_img_{image_id}_{normalize_condition(condition)}"
 
@@ -184,17 +129,6 @@ def build_annotation_record(
     culture: str,
     condition: str,
 ) -> dict[str, Any]:
-    """Flatten a completed LangGraph state into a serialisable annotation record.
-
-    Args:
-        state (dict): Final graph state after all nodes have run.
-        model_name (str): Model identifier (e.g., "qwen3_5_2b").
-        culture (str): Culture name (e.g., "arabic").
-        condition (str): Canonical annotation condition (legacy ``cultural`` is accepted).
-
-    Returns:
-        dict: Flat record suitable for JSONL serialisation.
-    """
     condition = normalize_condition(condition)
     parsed = state.get("parsed") or {}
     sentiment_int = parsed.get("sentiment", -1)
@@ -247,26 +181,6 @@ async def run_pipeline(
     failures_path: Path,
     n_runs: int,
 ) -> dict[str, Any]:
-    """Annotate every image in ``df`` across ``n_runs`` independent passes.
-
-    Inference assets are validated once up front, before any output file is opened or any
-    image is iterated: a missing or wrong-backend trained adapter must abort the run, never
-    become raw base inference recorded under a trained condition label.
-
-    Args:
-        culture (str): Culture name, or ``inference_only`` for the raw base-model reference.
-        condition (str): Canonical annotation condition (legacy ``cultural`` is accepted).
-        model_name (str): Model identifier (e.g., "qwen3_5_2b").
-        df (pd.DataFrame): Image list with ``image_id``, ``image_path`` and ``sentiment``.
-        settings (AnnotatorSettings): Annotator configuration.
-        semaphore (asyncio.Semaphore): Caps the number of concurrent graph invocations.
-        out_path (Path): JSONL file appended with successfully parsed annotations.
-        failures_path (Path): JSONL file appended with failed annotations.
-        n_runs (int): Number of independent annotation passes per image.
-
-    Returns:
-        dict: Success, failure and skip counts alongside the run's identifying metadata.
-    """
     condition = normalize_condition(condition)
     validate_inference_assets(culture, model_name, condition, settings)
     graph = build_annotation_graph(settings)
@@ -364,18 +278,6 @@ def run_single(
     limit: int | None = None,
     n_runs: int = 5,
 ) -> None:
-    """Run one (culture, condition, model_name) annotation job end to end.
-
-    Concurrency is capped at ``AnnotatorSettings.max_concurrent`` so that concurrent
-    ``graph.ainvoke`` calls cannot exhaust memory or trip API rate limits.
-
-    Args:
-        culture (str): Culture name, or ``inference_only`` for the raw base-model reference.
-        model_name (str): Model identifier (e.g., "qwen3_5_2b").
-        condition (str): Annotation condition (legacy ``cultural`` is accepted).
-        limit (int | None): Cap on the number of images, for smoke tests.
-        n_runs (int): Number of independent annotation passes per image.
-    """
     condition = normalize_condition(condition)
     if condition == "inference_only" and culture != INFERENCE_ONLY_CULTURE:
         console.print(

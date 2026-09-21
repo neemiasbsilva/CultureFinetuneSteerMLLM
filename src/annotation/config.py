@@ -1,9 +1,4 @@
-"""Annotation pipeline configuration.
-
-The annotation prompt injects no persona and no culture: the cultural bias under
-study is already in the model weights from fine-tuning, so it is not re-injected
-at annotation time.
-"""
+"""Annotation pipeline configuration."""
 
 import hashlib
 import os
@@ -55,14 +50,6 @@ def annotation_seed(
     image_id: str,
     run_index: int,
 ) -> int:
-    """Stable matched-pass seed shared by every experimental condition.
-
-    Culture and condition are deliberately absent from the key.  Thus a given
-    model/image/pass consumes the same seed under every condition, including
-    across separate Stage-3 process invocations.  The result is reduced to the
-    range accepted by numpy, torch, and mlx_vlm.
-    """
-
     payload = f"{int(base_seed)}\0{model_name}\0{image_id}\0{int(run_index)}"
     digest = hashlib.sha256(payload.encode("utf-8")).digest()
     return int.from_bytes(digest[:8], "big") % (2**31 - 1)
@@ -70,21 +57,6 @@ def annotation_seed(
 
 @dataclass
 class AnnotatorSettings:
-    """Runtime settings for the annotation pipeline.
-
-    Attributes:
-        model_id_map: MLX-community model IDs for mlx_vlm inference, which is Apple Silicon
-            only.  Only models whose training config declares ``backend: "mlx"`` belong here:
-            ``gemma4_e2b`` trains via ``backend: "hf_mps"``, so it lives in ``hf_model_id_map``
-            only, matching how its checkpoints were actually produced.
-        hf_model_id_map: HF model IDs, used directly for HF-backend models and as the fallback
-            for mlx-backend models (``qwen3_5_2b``, ``gemma4_e2b``) on machines without
-            mlx_vlm (e.g. CUDA), mirroring ``02_train_culture_models.sh``.  Only models
-            that can read an image belong here: ``llama3_2_3b`` trains on the text-only
-            WVS track but has no vision path, so annotating with it would score a
-            caption it never saw the image for.
-    """
-
     max_concurrent: int = field(
         default_factory=lambda: int(os.getenv("ANNOTATION_MAX_CONCURRENT", "1"))
     )

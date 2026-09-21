@@ -17,10 +17,6 @@ def build_annotation_graph(
 ) -> CompiledStateGraph[
     CulturalAnnotationState, None, CulturalAnnotationState, CulturalAnnotationState
 ]:
-    """
-    Build and compile the LangGraph pipeline:
-      [image_loader] → [assembler] → [annotator] → END
-    """
     annotator_node: Any = make_annotator_node(settings)
 
     graph = StateGraph(CulturalAnnotationState)
