@@ -1,0 +1,43 @@
+model:
+  key: "qwen3_vl_2b"              # checkpoints/global/qwen3_vl_2b/distributional, same backbone dir as the WVS track
+  id: "Qwen/Qwen3-VL-2B-Thinking"
+  modality: "vision_text"
+  backend: "hf"                  # auto-detects cuda > mps > cpu at runtime
+  dtype: "bfloat16"
+  image_max_pixels: 200704       # 448×448, identical to qwen3_vl_2b.yaml; no image reaches this run
+
+condition: "distributional"
+
+data:
+  format: "distributional"
+  exclude_evaluation_items: false   # Cao et al. protocol: every record of their train/valid splits
+
+lora:                            # Cao et al., llama_recipes/configs/peft.py
+  r: 8
+  alpha: 32
+  dropout: 0.05
+  target_modules:
+    - "q_proj"
+    - "v_proj"
+
+training:                        # Cao et al., configs/training.py and train_slurm.sh
+  batch_size: 8
+  gradient_accumulation: 1       # effective batch 8
+  max_epochs: 6
+  learning_rate: 1.0e-4
+  lr_schedule: "step_epoch"      # StepLR(step_size=1, gamma=0.85), stepped once per epoch
+  lr_gamma: 0.85
+  warmup_steps: 0
+  early_stopping_patience: 5
+  early_stopping_min_epochs: 0
+  max_seq_len: 256               # longest reference prompt is 201 tokens here; prompts are never truncated
+  logging_steps: 25
+  eval_steps: 200
+  save_steps: 200
+  save_total_limit: 3
+  max_grad_norm: 1.0             # they do not clip; 1.0 is the Trainer default
+  gradient_checkpointing: false
+
+mlflow:
+  experiment: "culture_mllm_distributional_training"
+  tracking_uri: "http://127.0.0.1:5000"
