@@ -102,6 +102,40 @@ def test_the_small_new_models_keep_the_shared_effective_batch_of_sixteen(
     assert train_cfg["batch_size"] * train_cfg["gradient_accumulation"] == 16
 
 
+@pytest.mark.parametrize("track", ["distributional", "subpop"])
+def test_the_30b_first_token_configs_fit_the_card_the_way_the_wvs_config_does(
+    track: str,
+) -> None:
+    train_cfg = _load(CONFIG_DIR / f"muse_glimmer_30b_{track}.yaml")["training"]
+    base_cfg = _load(CONFIG_DIR / "muse_glimmer_30b.yaml")["training"]
+
+    assert train_cfg["quantization"] == base_cfg["quantization"] == "4bit"
+    assert train_cfg["gradient_checkpointing"] is True
+
+
+@pytest.mark.parametrize("track", ["distributional", "subpop"])
+def test_the_30b_first_token_configs_keep_the_recipe_of_the_2b_ones(track: str) -> None:
+    muse = _load(CONFIG_DIR / f"muse_glimmer_30b_{track}.yaml")
+    qwen = _load(CONFIG_DIR / f"qwen3_vl_2b_{track}.yaml")
+    card_bound = {"batch_size", "gradient_accumulation", "gradient_checkpointing", "quantization"}
+    per_backbone = {"eval_steps", "save_steps", "early_stopping_patience", "max_seq_len"}
+
+    def recipe(cfg: dict[str, Any]) -> dict[str, Any]:
+        return {k: v for k, v in cfg["training"].items() if k not in card_bound | per_backbone}
+
+    def effective_batch(cfg: dict[str, Any]) -> int:
+        return int(cfg["training"]["batch_size"] * cfg["training"]["gradient_accumulation"])
+
+    def patience_in_steps(cfg: dict[str, Any]) -> int:
+        return int(cfg["training"]["early_stopping_patience"] * cfg["training"]["eval_steps"])
+
+    assert muse["lora"] == qwen["lora"]
+    assert muse["data"] == qwen["data"]
+    assert recipe(muse) == recipe(qwen)
+    assert effective_batch(muse) == effective_batch(qwen)
+    assert patience_in_steps(muse) == patience_in_steps(qwen)
+
+
 def test_a_text_only_modality_selects_the_tokenizer_side_lora_defaults() -> None:
     assert default_exclude_modules("text") is None
     assert default_exclude_modules("vision_text") == ".*(vision_tower|audio_tower).*"

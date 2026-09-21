@@ -1,0 +1,42 @@
+model:
+  key: "muse_glimmer_30b"         # checkpoints/subpop/muse_glimmer_30b/subpop, same backbone name as the WVS track
+  id: "meta-models/Muse-Glimmer-30B"
+  backend: "hf"                  # auto-detects cuda > mps > cpu at runtime
+  dtype: "bfloat16"
+  image_max_pixels: 200704       # 448×448, identical to muse_glimmer_30b.yaml; no image reaches this run
+
+condition: "subpop"
+
+data:
+  format: "subpop"
+  val_ratio: 0.1                 # Suh et al.: questions split 0.9 / 0.1, every subpopulation of a question on one side
+  split_seed: 42
+  exclude_related_items: false   # Suh et al. protocol: every SubPOP-Train question, the related ones are logged
+
+lora:                            # Suh et al., subpop/train/configs/peft.py
+  r: 8
+  alpha: 32
+  dropout: 0.05
+  target_modules: ["q_proj", "v_proj"]
+
+training:                        # Suh et al., README fine-tuning command
+  batch_size: 4
+  gradient_accumulation: 32      # effective batch 128
+  max_epochs: 50
+  learning_rate: 2.0e-4
+  lr_schedule: "cosine"
+  warmup_steps: 0.1              # below 1 the Trainer reads it as a ratio: their warmup_ratio of 0.1
+  early_stopping_patience: 20    # evaluations, two per epoch: the ten epochs qwen3_vl_2b_subpop.yaml waits
+  early_stopping_min_epochs: 5
+  max_seq_len: 320               # longest QA-steered prompt is 281 tokens here; prompts are never truncated
+  logging_steps: 25
+  eval_steps: 250                # half an epoch, so an interrupted multi-day run loses at most that
+  save_steps: 250
+  save_total_limit: 3
+  max_grad_norm: 1.0             # they do not clip; 1.0 is the Trainer default
+  gradient_checkpointing: true
+  quantization: "4bit"           # QLoRA via bitsandbytes — 59.6 GB bf16 on a 32 GB card
+
+mlflow:
+  experiment: "culture_mllm_subpop_training"
+  tracking_uri: "http://127.0.0.1:5000"
