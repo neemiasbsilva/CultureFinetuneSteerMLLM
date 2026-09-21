@@ -1,18 +1,5 @@
 #!/usr/bin/env python3
-"""Generate loss-curve figures for all Qwen3.5-2B fine-tuning runs.
-
-Produces two outputs:
-  outputs/figures/loss_curves_all.pdf
-    — three-column grid, one panel per culture, cultural (solid) and baseline
-      (dashed) overlaid for direct comparison.
-
-  outputs/figures/loss_curve_<culture>_<condition>.pdf  (two per culture)
-    — Individual panels, one per (culture, condition) pair.
-
-Usage:
-    uv run python scripts/generate_loss_curves_all.py
-    uv run python scripts/generate_loss_curves_all.py --no-individual
-"""
+"""Generate loss-curve figures for all Qwen3.5-2B fine-tuning runs."""
 
 from __future__ import annotations
 
@@ -42,26 +29,10 @@ C_BASELINE = "#5B8FD4"
 
 
 def _fetch(client: mlflow.MlflowClient, run_id: str, key: str) -> list[Any]:
-    """Fetch a metric history from MLflow, sorted by step.
-
-    Args:
-        client (mlflow.MlflowClient): Active MLflow client.
-        run_id (str): MLflow run ID.
-        key (str): Metric key (e.g., "train_loss").
-
-    Returns:
-        list: Metric objects sorted by step.
-    """
     return sorted(client.get_metric_history(run_id, key), key=lambda m: m.step)
 
 
 def load_all_runs() -> dict[tuple[str, str], dict[str, Any]]:
-    """Load all Qwen3.5-2B fine-tuning run metrics from MLflow.
-
-    Returns:
-        dict: Mapping of (culture, condition) to a dict with keys
-            "ts", "tv" (train steps/values) and "vs", "vv" (val steps/values).
-    """
     client = mlflow.MlflowClient(MLFLOW_URI)
     exps = client.search_experiments()
     exp_id = next(e.experiment_id for e in exps if "culturevlm" in e.name)
@@ -121,13 +92,6 @@ def _draw_panel(
 
 
 def _run_end(data: dict[tuple[str, str], dict[str, Any]], culture: str | None = None) -> float:
-    """Return the last training step reached, over one culture or over every run.
-
-    Cultures no longer share a step count: a partition built from a single country
-    holds half the examples of a pooled one, so its epochs fall at different steps.
-    Epoch markers are placed from each culture's own run length rather than from a
-    constant.
-    """
     ends = [
         d["ts"][-1]
         for (run_culture, _), d in data.items()
@@ -142,14 +106,6 @@ def _finalise_panel(
     epoch_steps: list[float],
     show_epoch_labels: bool = False,
 ) -> None:
-    """Apply shared axis limits, epoch markers, and grid to a panel.
-
-    Args:
-        ax (Axes): The axes to finalise.
-        x_limit (float): Upper bound of the step axis, shared across panels.
-        epoch_steps (list[float]): Step positions of this run's epoch boundaries.
-        show_epoch_labels (bool, optional): Whether to annotate epoch boundaries. Defaults to False.
-    """
     ymax = min(4.0, ax.get_ylim()[1])
     ax.set_ylim(0, ymax)
     ax.set_xlim(0, x_limit + 60)
@@ -167,12 +123,6 @@ def _finalise_panel(
 
 
 def make_combined(data: dict[tuple[str, str], dict[str, Any]], out_path: Path) -> None:
-    """Render a grid comparing cultural vs. baseline conditions per culture.
-
-    Args:
-        data (dict): Run data as returned by load_all_runs().
-        out_path (Path): Destination PDF path.
-    """
     n_rows = -(-len(CULTURES) // GRID_COLS)
     x_limit = _run_end(data)
     fig, axes = plt.subplots(
@@ -259,12 +209,6 @@ def make_combined(data: dict[tuple[str, str], dict[str, Any]], out_path: Path) -
 
 
 def make_individual(data: dict[tuple[str, str], dict[str, Any]], fig_dir: Path) -> None:
-    """Save one PDF per (culture, condition) run.
-
-    Args:
-        data (dict): Run data as returned by load_all_runs().
-        fig_dir (Path): Directory where individual PDFs are written.
-    """
     fig_dir.mkdir(parents=True, exist_ok=True)
     for (culture, condition), d in data.items():
         fig, ax = plt.subplots(figsize=(4.0, 2.4))

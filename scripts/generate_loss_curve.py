@@ -1,14 +1,5 @@
 #!/usr/bin/env python3
-"""Generate the training/validation loss curve figure from MLflow metrics.
-
-Reads actual loss history for the Arabic cultural Qwen3.5-2B run
-(run 8ec81ee5) and saves a publication-ready PDF to
-outputs/figures/loss_curve_arabic_cultural.pdf.
-
-Usage:
-    uv run python scripts/generate_loss_curve.py
-    uv run python scripts/generate_loss_curve.py --run-id <full-run-id> --out <path>
-"""
+"""Generate the training/validation loss curve figure from MLflow metrics."""
 
 from __future__ import annotations
 
@@ -34,14 +25,6 @@ TOTAL_STEPS = 5670
 
 
 def fetch_metrics(run_id: str) -> tuple[list[Any], list[Any], list[Any], list[Any]]:
-    """Fetch train and validation loss histories from MLflow.
-
-    Args:
-        run_id (str): MLflow run ID.
-
-    Returns:
-        tuple: (train_steps, train_values, val_steps, val_values), each a list.
-    """
     client = mlflow.MlflowClient(MLFLOW_URI)
     tl = sorted(client.get_metric_history(run_id, "train_loss"), key=lambda m: m.step)
     vl = sorted(client.get_metric_history(run_id, "val_loss"), key=lambda m: m.step)
@@ -54,19 +37,6 @@ def fetch_metrics(run_id: str) -> tuple[list[Any], list[Any], list[Any], list[An
 
 
 def find_run_id(culture: str, condition: str, model: str) -> str:
-    """Look up an MLflow run ID by culture, condition, and model tags.
-
-    Args:
-        culture (str): Culture tag value (e.g., "arabic").
-        condition (str): Condition tag value (e.g., "cultural").
-        model (str): Model name tag value (e.g., "qwen3_5_2b").
-
-    Returns:
-        str: The run ID of the first matching run.
-
-    Raises:
-        ValueError: If no matching run is found.
-    """
     client = mlflow.MlflowClient(MLFLOW_URI)
     exps = client.search_experiments()
     exp_id = next(e.experiment_id for e in exps if "culturevlm" in e.name)
@@ -92,20 +62,6 @@ def plot(
     culture: str = "Arabic",
     condition: str = "cultural",
 ) -> None:
-    """Render and save a publication-ready loss-curve PDF.
-
-    Axis limits are set before the annotations are drawn so that the final limits are
-    already in effect when annotation and epoch-label positions are computed.
-
-    Args:
-        train_steps (list): Step indices for training loss.
-        train_vals (list): Training loss values.
-        val_steps (list): Step indices for validation loss.
-        val_vals (list): Validation loss values.
-        out_path (Path): Destination PDF path.
-        culture (str, optional): Culture label for the title. Defaults to "Arabic".
-        condition (str, optional): Condition label for the title. Defaults to "cultural".
-    """
     fig, ax = plt.subplots(figsize=(7.2, 3.0))
 
     ax.plot(

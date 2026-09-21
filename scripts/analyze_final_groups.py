@@ -1,15 +1,5 @@
 #!/usr/bin/env python3
-"""Summarize groups, workers, and assignments in data/raw/final.json.
-
-By default this script treats explicit labels like ``group9_form8`` as groups,
-using the ``group9`` prefix. Use ``--mode worker`` to instead summarize unique
-``worker_id`` values.
-
-Usage:
-    python3 scripts/analyze_final_groups.py
-    python3 scripts/analyze_final_groups.py --mode worker
-    python3 scripts/analyze_final_groups.py --csv outputs/analysis/final_group_summary.csv
-"""
+"""Summarize groups, workers, and assignments in data/raw/final.json."""
 
 from __future__ import annotations
 
@@ -29,8 +19,6 @@ GROUP_RE = re.compile(r"^(group\d+)(?:_form\d+)?$")
 
 @dataclass
 class GroupSummary:
-    """Aggregated task statistics for one group key."""
-
     tasks: int = 0
     image_responses: int = 0
     assignment_ids: set[str] = field(default_factory=set)
@@ -38,7 +26,6 @@ class GroupSummary:
     image_ids: set[str] = field(default_factory=set)
 
     def add_task(self, task: dict[str, Any]) -> None:
-        """Add one final.json task to the summary."""
         self.tasks += 1
 
         assignment_id = str(task.get("assignment_id") or "")
@@ -57,7 +44,6 @@ class GroupSummary:
 
 
 def load_tasks(path: Path) -> list[dict[str, Any]]:
-    """Load tasks from the final.json wrapper object."""
     with open(path) as f:
         payload = json.load(f)
 
@@ -68,7 +54,6 @@ def load_tasks(path: Path) -> list[dict[str, Any]]:
 
 
 def group_key(task: dict[str, Any], mode: str) -> str | None:
-    """Return the grouping key for one task."""
     assignment_id = str(task.get("assignment_id") or "")
     worker_id = str(task.get("worker_id") or "")
 
@@ -92,7 +77,6 @@ def group_key(task: dict[str, Any], mode: str) -> str | None:
 
 
 def summarize(tasks: list[dict[str, Any]], mode: str) -> tuple[dict[str, GroupSummary], int]:
-    """Build per-group summaries and count tasks without a group key."""
     groups: dict[str, GroupSummary] = defaultdict(GroupSummary)
     ungrouped_tasks = 0
 
@@ -107,7 +91,6 @@ def summarize(tasks: list[dict[str, Any]], mode: str) -> tuple[dict[str, GroupSu
 
 
 def natural_group_sort(key: str) -> tuple[int, int | str]:
-    """Sort group labels like group9 before group10, then other labels."""
     match = re.fullmatch(r"group(\d+)", key)
     if match:
         return 0, int(match.group(1))
@@ -115,7 +98,6 @@ def natural_group_sort(key: str) -> tuple[int, int | str]:
 
 
 def clipped(values: set[str], limit: int) -> str:
-    """Return a comma-separated preview of set values."""
     ordered = sorted(values, key=natural_group_sort)
     if len(ordered) <= limit:
         return ", ".join(ordered)
@@ -131,7 +113,6 @@ def print_summary(
     mode: str,
     max_list: int,
 ) -> None:
-    """Print a compact terminal report."""
     grouped_tasks = sum(summary.tasks for summary in groups.values())
     total_image_responses = sum(summary.image_responses for summary in groups.values())
     total_unique_images = (
@@ -189,7 +170,6 @@ def print_summary(
 
 
 def write_csv(path: Path, groups: dict[str, GroupSummary]) -> None:
-    """Write complete per-group details to a CSV file."""
     path.parent.mkdir(parents=True, exist_ok=True)
     with open(path, "w", newline="") as f:
         writer = csv.DictWriter(
@@ -225,7 +205,6 @@ def write_csv(path: Path, groups: dict[str, GroupSummary]) -> None:
 
 
 def parse_args() -> argparse.Namespace:
-    """Parse command-line arguments."""
     parser = argparse.ArgumentParser(
         description="Analyze unique groups and associated workers in final.json."
     )
@@ -262,7 +241,6 @@ def parse_args() -> argparse.Namespace:
 
 
 def main() -> None:
-    """Run the analysis."""
     args = parse_args()
     input_path = args.input.expanduser().resolve()
 
