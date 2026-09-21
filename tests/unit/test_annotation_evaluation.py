@@ -1,10 +1,4 @@
-"""Pin the Stage-4 evaluation contract.
-
-Every number in the paper passes through repetition aggregation, the matched
-five-pass gate, and the common-image panel.  A silent change to any of them —
-a different tie-break, an unmatched seed slipping through, a panel that stops
-intersecting — moves published results without raising an error.
-"""
+"""Pin the Stage-4 evaluation contract."""
 
 from __future__ import annotations
 

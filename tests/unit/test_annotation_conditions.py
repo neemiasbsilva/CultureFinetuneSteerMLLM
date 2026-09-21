@@ -1,10 +1,4 @@
-"""Pin the annotation condition contract.
-
-A silently renamed condition, a checkpoint directory that stops matching the
-Stage-2 layout on disk, or an adapter that quietly falls back to the raw base
-model would all produce annotation runs that look valid but answer a different
-experimental question.
-"""
+"""Pin the annotation condition contract."""
 
 from __future__ import annotations
 

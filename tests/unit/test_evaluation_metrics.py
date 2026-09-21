@@ -1,12 +1,4 @@
-"""Pin the per-fold training metric contract.
-
-Every fold score that reaches the Holm-Bonferroni comparison is produced here, so a
-silent change is a silent change to the paper.  The three failure modes this file
-guards are: the -1 failed-parse sentinel being scored as a real class instead of
-being dropped, a fold with no parseable prediction raising instead of degrading to a
-neutral record, and the fold aggregator switching between population and sample
-standard deviation or quietly folding non-float fields into the mean.
-"""
+"""Pin the per-fold training metric contract."""
 
 from __future__ import annotations
 
@@ -185,7 +177,6 @@ def test_a_constant_metric_across_folds_aggregates_to_zero_spread() -> None:
 
 @pytest.mark.filterwarnings("ignore")
 def test_aggregating_a_single_fold_currently_yields_nan_standard_deviations() -> None:
-    """Characterization: ddof=1 on one observation is NaN. Pins today's behaviour."""
     aggregated = aggregate_fold_metrics([_fold(0.6, 1.0)])
     assert aggregated["f1_macro_mean"] == pytest.approx(0.6)
     assert math.isnan(aggregated["f1_macro_std"])
@@ -193,7 +184,6 @@ def test_aggregating_a_single_fold_currently_yields_nan_standard_deviations() ->
 
 @pytest.mark.filterwarnings("ignore")
 def test_a_unanimous_fold_currently_scores_qwk_as_nan_and_poisons_the_mean() -> None:
-    """Characterization: np.mean propagates the NaN. Pins today's behaviour."""
     unanimous = compute_classification_metrics([3, 3, 3], [3, 3, 3])
     assert unanimous["accuracy"] == pytest.approx(1.0)
     assert math.isnan(unanimous["qwk"])

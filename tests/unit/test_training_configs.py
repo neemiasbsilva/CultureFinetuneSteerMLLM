@@ -1,12 +1,4 @@
-"""Pin the shipped training configs against the loader that reads them.
-
-A config is the whole specification of a run: what is loaded, at what precision,
-and through which processor.  The failures that matter are the ones that survive
-YAML parsing — an image budget on a model that never sees an image, a chat
-template pointing at a file nobody shipped, a checkpoint too large for the card
-at the declared quantization.  Those cost a download and a load to discover at
-runtime, so they are asserted here instead.
-"""
+"""Pin the shipped training configs against the loader that reads them."""
 
 from __future__ import annotations
 

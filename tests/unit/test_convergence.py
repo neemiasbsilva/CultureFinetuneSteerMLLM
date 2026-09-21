@@ -1,17 +1,4 @@
-"""Pin the per-image convergence contract.
-
-Convergence carries the headline claim: how far culture-conditioned annotations
-drift from one another, and how far the WVS condition moves an image away from
-its inference-only baseline.  Each metric here fails quietly rather than loudly.
-A flipped Jaccard convention on empty tag sets rescales every label-overlap
-number.  A grouping that forgets ``condition`` silently scores a WVS run against
-its own baseline as though the two were rival models, collapsing exactly the
-contrast the experiment exists to measure.  A bootstrap whose per-group seed
-stops being derived from the group identity makes published confidence intervals
-move between reruns of the same analysis.  These tests hold all three in place,
-and they pin the degenerate thin-panel path, where an image carries a single
-annotation and per-image caption similarity has no pair to score.
-"""
+"""Pin the per-image convergence contract."""
 
 from __future__ import annotations
 

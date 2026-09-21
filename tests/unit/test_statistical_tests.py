@@ -1,13 +1,4 @@
-"""Pin the Holm-Bonferroni comparison family that decides which results get a star.
-
-This module is the only thing standing between a fold-metrics CSV and a significance
-claim in the paper, and every way it can break is silent.  A pair that differs on two
-dimensions slipping into the family inflates the correction factor for everyone else.
-A lost cumulative maximum lets a weaker comparison receive a smaller adjusted p-value
-than a stronger one.  A change in how unequal fold lists are truncated re-pairs the
-observations underneath a paired test.  A table that stops filtering or stops bolding
-publishes the wrong rows.  None of those raise; they just change the numbers.
-"""
+"""Pin the Holm-Bonferroni comparison family that decides which results get a star."""
 
 from __future__ import annotations
 

@@ -1,13 +1,4 @@
-"""Pin the Stage-1 data contract that every training run silently depends on.
-
-The SFT loaders and the k-fold splitter sit upstream of every reported number.
-A JSONL loader that swallows a truncated line, a merge that quietly writes zero
-records when an input path moves, an ``images`` column that disappears because
-of the order records happen to sit in, or a fold split that leaks validation
-rows into training all produce a run that trains happily and reports a score
-that means something else.  None of those raise on their own, so they are
-asserted here.
-"""
+"""Pin the Stage-1 data contract that every training run silently depends on."""
 
 from __future__ import annotations
 

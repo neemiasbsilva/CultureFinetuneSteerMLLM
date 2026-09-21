@@ -1,15 +1,4 @@
-"""Pin the Stage-3 annotation graph contract.
-
-Every annotation in the corpus is produced by the same three-node pass: load the
-image, install the neutral system prompt, call the model.  A persona leaking back
-into the assembler, a rewired edge that skips the loader, or a message list whose
-image slot silently degrades would all keep the pipeline running and quietly change
-what the models were asked — no exception, no failed run, just different results in
-the paper.  These tests fail loudly instead.
-
-The annotator factory is replaced by a recording fake throughout, so nothing here
-touches model weights, adapters, or the network.
-"""
+"""Pin the Stage-3 annotation graph contract."""
 
 from __future__ import annotations
 
@@ -41,8 +30,6 @@ EXPECTED_EDGES = {
 
 
 class _RecordingAnnotatorFactory:
-    """Stand-in for ``make_annotator_node`` that records instead of generating."""
-
     def __init__(self) -> None:
         self.settings_seen: list[AnnotatorSettings] = []
         self.states_seen: list[dict[str, Any]] = []
@@ -58,8 +45,6 @@ class _RecordingAnnotatorFactory:
 
 
 class _OpenRecorder:
-    """Wrapper around ``builtins.open`` that logs which image files were read."""
-
     def __init__(self, real_open: Callable[..., Any], suffix: str) -> None:
         self._real_open = real_open
         self._suffix = suffix

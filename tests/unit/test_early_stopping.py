@@ -1,13 +1,4 @@
-"""Pin the training-halt contract of the EMA early stopper.
-
-The stopper decides when a run ends and which epoch gets labelled "best", so its
-mistakes never surface as errors — they surface as a checkpoint trained for the
-wrong number of epochs.  A flipped comparison would turn the loss monitor into a
-maximiser, an off-by-one in the patience counter would cut every run short or
-never end one, and a warmup guard that leaks would let a single noisy first
-evaluation kill a run before the model has seen the data.  Resume is equally
-silent: a state_dict that drops the counter restarts patience from zero.
-"""
+"""Pin the training-halt contract of the EMA early stopper."""
 
 from __future__ import annotations
 

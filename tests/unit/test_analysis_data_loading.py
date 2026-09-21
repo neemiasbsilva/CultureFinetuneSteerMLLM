@@ -1,16 +1,4 @@
-"""Pin the contract between the annotation directory layout and the analysis frame.
-
-Every downstream table, plot and significance test groups rows by ``profile``, so
-the loader is the single place where a run's identity is decided.  If directory
-inference stops filling in the model or culture, if the legacy ``cultural`` name
-stops collapsing onto ``wvs_cultural``, or if ``profile`` loses its condition
-suffix, the two arms of the experiment quietly merge into one group and every
-aggregate shifts without a single exception being raised.
-
-The loader is also the boundary where a missing or half-written output tree has to
-degrade into an empty frame instead of a traceback, so the shape it returns for
-absent roots, blank files and over-restrictive filters is pinned here as well.
-"""
+"""Pin the contract between the annotation directory layout and the analysis frame."""
 
 from __future__ import annotations
 

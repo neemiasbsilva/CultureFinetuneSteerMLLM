@@ -1,15 +1,4 @@
-"""Pin the culture roster against every list that has to agree with it.
-
-The roster used to be copy-pasted into six modules, four shell scripts and seven
-configs.  Nothing failed when a copy went stale — a sweep simply skipped a culture
-and the missing runs looked like runs nobody had got to yet.  These tests make the
-copies agree by assertion instead of by grep.
-
-The ``spanish-mx`` partition also has to be checked against what it claims to be.
-CultureLLM's ``spanish`` concatenates Argentine and Mexican respondents, so a
-Mexico-only partition must reproduce that file's second half exactly; a prompt off
-by one character would silently answer a different question than the one asked.
-"""
+"""Pin the culture roster against every list that has to agree with it."""
 
 from __future__ import annotations
 
@@ -164,11 +153,6 @@ def test_spanish_mx_differs_from_spanish_only_in_the_country_it_names() -> None:
 
 @needs_culturellm
 def test_pooling_argentina_with_mexico_contradicts_a_third_of_the_survey() -> None:
-    """The premise of the comparison: the two halves of ``spanish`` disagree.
-
-    If they agreed, ``spanish-mx`` would be a smaller copy of ``spanish`` and the
-    experiment would have nothing to measure.
-    """
     pooled = load_wvs_culture_data("spanish")
     half = len(pooled) // 2
     seed_questions = 50
@@ -194,13 +178,6 @@ def test_the_context_blurbs_cover_every_culture_that_trains_on_images() -> None:
 
 @needs_culturellm
 def test_the_derived_partition_is_half_the_size_of_the_pooled_one() -> None:
-    """Guard the size confound the comparison has to report.
-
-    ``spanish-mx`` draws one country's answers where ``spanish`` draws two, so it
-    holds half the examples and takes half the optimizer steps at equal epochs.
-    EXPERIMENTS.md states that ratio; should a future recipe change it, the
-    write-up has to change with it.
-    """
     derived = load_wvs_culture_data("spanish-mx")
     pooled = load_wvs_culture_data("spanish")
     assert len(derived) * 2 == len(pooled)

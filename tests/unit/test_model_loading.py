@@ -1,15 +1,4 @@
-"""Pin the one place that decides how base weights reach the device.
-
-Every adapter in the paper is trained on top of whatever `build_base_model`
-handed back, and the ways this goes wrong are all silent: a `dtype` that reads
-as declared but resolves against absent checkpoint metadata, a pre-quantized
-release loaded as if it were BF16, a `None` quantization config that overwrites
-the checkpoint's own, a `device_map` that shards a model the trainer assumed
-was on one visible device, or a text-only `Auto*` class that loads a composite
-checkpoint's language path and leaves the tower behind.  None of those raise —
-they just train something other than what the config describes, so they are
-asserted here instead.
-"""
+"""Pin the one place that decides how base weights reach the device."""
 
 from __future__ import annotations
 
