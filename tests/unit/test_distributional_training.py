@@ -300,6 +300,8 @@ def test_score_batch_forwards_only_the_prompt_and_returns_loss_logits_and_mass(
 
 
 class _PredictionHost:
+    loss_fn = staticmethod(kl_loss)
+
     def _prepare_inputs(self, inputs: dict[str, Any]) -> dict[str, Any]:
         return inputs
 
@@ -343,6 +345,25 @@ def test_compute_loss_returns_a_scalar_or_the_pair_with_extras(logits_model: Mod
     assert set(pair[1]) == {"option_logits", "option_mass"}
 
 
+class _ExactKlHost(_PredictionHost):
+    loss_fn = staticmethod(exact_kl)
+
+
+def test_the_trainer_scores_with_the_loss_it_was_given(logits_model: ModelFactory) -> None:
+    batch = _batch()
+    model = cast(torch.nn.Module, _model_for(batch, logits_model))
+    host = cast(DistributionalTrainer, _ExactKlHost())
+
+    scalar = DistributionalTrainer.compute_loss(host, model, batch)
+    predicted = DistributionalTrainer.prediction_step(host, model, batch, True)
+
+    assert isinstance(scalar, torch.Tensor)
+    assert scalar.item() == pytest.approx((KL_A + KL_B) / 2)
+    assert predicted[0] is not None
+    assert predicted[0].item() == pytest.approx((KL_A + KL_B) / 2)
+    assert score_batch(model, batch, exact_kl)[0].item() == pytest.approx((KL_A + KL_B) / 2)
+
+
 class _FakeTrainer:
     def __init__(self, batch: dict[str, torch.Tensor]) -> None:
         self.batch = batch
@@ -372,6 +393,14 @@ def test_the_base_check_fails_when_the_letters_get_no_mass(logits_model: ModelFa
     with pytest.raises(RuntimeError, match="mass on the option letters"):
         assert_base_elicits_options(_FakeTrainer(batch), model)
     assert model.training is True
+
+
+def test_the_base_check_names_the_stub_it_was_given(logits_model: ModelFactory) -> None:
+    batch = _batch()
+    model = _model_for(batch, logits_model, letters_win=False)
+
+    with pytest.raises(RuntimeError, match="after 'Answer:'"):
+        assert_base_elicits_options(_FakeTrainer(batch), model, stub="Answer:")
 
 
 def _write_splits(raw_dir: Path, raw_survey_record: RecordFactory) -> None:

@@ -62,6 +62,7 @@ DEBUG_CONDITION_SUFFIX = "_debug"
 
 FloatArray = NDArray[np.float64]
 BoolArray = NDArray[np.bool_]
+LossFn = Callable[[torch.Tensor, torch.Tensor], torch.Tensor]
 
 
 def answer_positions(answer_index: torch.Tensor) -> tuple[torch.Tensor, torch.Tensor]:
@@ -188,11 +189,13 @@ def step_epoch_factor(gamma: float, steps_per_epoch: int) -> Callable[[int], flo
     return factor
 
 
-def score_batch(model: Any, batch: dict[str, torch.Tensor]) -> tuple[torch.Tensor, dict[str, Any]]:
+def score_batch(
+    model: Any, batch: dict[str, torch.Tensor], loss_fn: LossFn = kl_loss
+) -> tuple[torch.Tensor, dict[str, Any]]:
     answer = forward_answer_logits(model, batch)
     option_logits = gather_option_logits(answer, batch["option_token_ids"])
     target = batch["target_dist"]
-    loss = kl_loss(option_logits, target)
+    loss = loss_fn(option_logits, target)
     with torch.no_grad():
         mass = option_mass(answer.detach(), batch["option_token_ids"], target >= 0)
     return loss, {"option_logits": option_logits.detach(), "option_mass": mass}
@@ -200,12 +203,18 @@ def score_batch(model: Any, batch: dict[str, torch.Tensor]) -> tuple[torch.Tenso
 
 class DistributionalTrainer(Trainer):
     def __init__(
-        self, *args: Any, steps_per_epoch: int, lr_gamma: float | None = None, **kwargs: Any
+        self,
+        *args: Any,
+        steps_per_epoch: int,
+        lr_gamma: float | None = None,
+        loss_fn: LossFn = kl_loss,
+        **kwargs: Any,
     ) -> None:
         super().__init__(*args, **kwargs)
         self.model_accepts_loss_kwargs = False
         self.steps_per_epoch = steps_per_epoch
         self.lr_gamma = lr_gamma
+        self.loss_fn = loss_fn
 
     def create_scheduler(
         self, num_training_steps: int, optimizer: torch.optim.Optimizer | None = None
@@ -229,7 +238,7 @@ class DistributionalTrainer(Trainer):
         return_outputs: bool = False,
         num_items_in_batch: torch.Tensor | int | None = None,
     ) -> torch.Tensor | tuple[torch.Tensor, Any]:
-        loss, extras = score_batch(model, inputs)
+        loss, extras = score_batch(model, inputs, self.loss_fn)
         return (loss, extras) if return_outputs else loss
 
     def prediction_step(
@@ -241,7 +250,7 @@ class DistributionalTrainer(Trainer):
     ) -> tuple[torch.Tensor | None, Any, torch.Tensor | None]:
         prepared = self._prepare_inputs(inputs)
         with torch.no_grad():
-            loss, extras = score_batch(model, prepared)
+            loss, extras = score_batch(model, prepared, self.loss_fn)
         if prediction_loss_only:
             return loss.detach(), None, None
         return (
@@ -251,7 +260,9 @@ class DistributionalTrainer(Trainer):
         )
 
 
-def assert_base_elicits_options(trainer: Any, model: Any) -> tuple[float, float, float]:
+def assert_base_elicits_options(
+    trainer: Any, model: Any, *, stub: str = ANSWER_PREFIX
+) -> tuple[float, float, float]:
     batch = next(iter(trainer.get_train_dataloader()))
     batch = {key: value.to(model.device) for key, value in batch.items()}
     was_training = model.training
@@ -272,7 +283,7 @@ def assert_base_elicits_options(trainer: Any, model: Any) -> tuple[float, float,
     if mass < MIN_BASE_OPTION_MASS:
         raise RuntimeError(
             f"\nThe base puts only {mass:.4f} of its next-token mass on the option letters "
-            f"after {ANSWER_PREFIX!r} — the letters are not what it emits there.\n"
+            f"after {stub!r} — the letters are not what it emits there.\n"
             "Check the option token ids and the prompt format before training; an "
             "adapter trained from here would learn a format the model never produces."
         )
