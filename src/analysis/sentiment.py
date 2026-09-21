@@ -1,13 +1,4 @@
-"""
-Sentiment accuracy analysis: cultural VLM predictions vs. σ₃P₅ ground truth.
-
-Adapted from analyzing-persona-effects-mllm/src/sentiment.py.
-Adds cross-validation with VADER and RoBERTa on justification text to
-triangulate the VLM's cultural sentiment signal.
-
-Outputs:
-    outputs/analysis/human_annotator_agreement.csv
-"""
+"""Sentiment accuracy analysis: cultural VLM predictions vs. σ₃P₅ ground truth."""
 
 from typing import Any
 
@@ -68,7 +59,6 @@ def _roberta_score(text: str, clf: Any) -> int:
 
 
 def compute_accuracy_metrics(y_true: list[int], y_pred: list[int]) -> dict[str, Any]:
-    """Classification metrics for one (culture, model) prediction set."""
     valid = [(t, p) for t, p in zip(y_true, y_pred, strict=False) if t >= 0 and p >= 0]
     if not valid:
         return {}
@@ -85,9 +75,6 @@ def compute_accuracy_metrics(y_true: list[int], y_pred: list[int]) -> dict[str, 
 
 
 def evaluate_all_models(df: pd.DataFrame) -> pd.DataFrame:
-    """
-    Evaluate each condition-aware (culture, model_name) prediction set.
-    """
     rows = []
     group_columns = ["culture", "model_name"]
     if "condition" in df.columns:
@@ -113,7 +100,6 @@ def evaluate_all_models(df: pd.DataFrame) -> pd.DataFrame:
 
 
 def add_vader_predictions(df: pd.DataFrame, text_col: str = "justification") -> pd.DataFrame:
-    """Append VADER-based sentiment predictions as a new column."""
     analyzer = SentimentIntensityAnalyzer()
     df = df.copy()
     df["vader_sentiment"] = df[text_col].apply(lambda t: _vader_score(t, analyzer))
@@ -126,7 +112,6 @@ def add_roberta_predictions(
     model_name: str = "cardiffnlp/twitter-roberta-base-sentiment-latest",
     device: str = "mps",
 ) -> pd.DataFrame:
-    """Append RoBERTa-based sentiment predictions as a new column."""
     clf = pipeline(
         "text-classification",
         model=model_name,

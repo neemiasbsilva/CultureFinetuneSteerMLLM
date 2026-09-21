@@ -1,18 +1,4 @@
-"""
-Cosine similarity analysis for cultural annotation outputs.
-
-Adapts analyzing-persona-effects-mllm/src/similarity.py:
-  - "demographic dimension" → "culture" dimension
-  - 24×24 profile matrix → 10×10 (culture × model or culture-only)
-  - Adds image-conditioned cross-culture similarity matrix.
-
-Key functions:
-    compute_per_image_similarity()         — mean cosine sim per image across culture models
-    compute_within_cross_similarity()      — within-culture vs. cross-culture per image
-    compute_culture_sim_matrix()           — N×N cross-culture similarity heatmap
-    compute_image_conditioned_culture_sim()— controls for visual content
-    cluster_order()                        — Ward hierarchical for heatmap ordering
-"""
+"""Cosine similarity analysis for cultural annotation outputs."""
 
 from typing import cast
 
@@ -23,7 +9,6 @@ from scipy.spatial.distance import cdist, squareform
 
 
 def _require_single_condition(df: pd.DataFrame, operation: str) -> None:
-    """Prevent legacy matrix APIs from pooling distinct experiment arms."""
     if "condition" in df.columns and df["condition"].dropna().nunique() > 1:
         raise ValueError(
             f"{operation} received multiple annotation conditions; filter to one "
@@ -32,7 +17,6 @@ def _require_single_condition(df: pd.DataFrame, operation: str) -> None:
 
 
 def cosine_similarity_matrix(a: np.ndarray, b: np.ndarray) -> np.ndarray:
-    """Pairwise cosine similarity between two embedding matrices."""
     return cast("np.ndarray", 1.0 - cdist(a, b, metric="cosine"))
 
 
@@ -42,11 +26,6 @@ def compute_per_image_similarity(
     group_col: str = "culture",
     context_cols: list[str] | None = None,
 ) -> pd.DataFrame:
-    """
-    Per-image mean cosine similarity across all culture models.
-    Returns DataFrame indexed by image_id with columns:
-        caption_sim_mean, caption_sim_std, n_annotations
-    """
     df = df.copy()
     df["_emb_idx"] = np.arange(len(df))
 
@@ -81,12 +60,6 @@ def compute_within_cross_similarity(
     group_col: str = "culture",
     modality: str = "caption",
 ) -> pd.DataFrame:
-    """
-    For each image: compute mean cosine similarity among annotations that SHARE
-    a culture value (within) vs. those that DIFFER (cross).
-
-    Mirrors mllm-persona-evaluation's within/cross demographic analysis.
-    """
     df = df.copy()
     df["_emb_idx"] = np.arange(len(df))
     context_cols = ["condition"] if "condition" in df.columns else []
@@ -128,12 +101,6 @@ def compute_culture_sim_matrix(
     embeddings: np.ndarray,
     group_col: str = "culture",
 ) -> tuple[np.ndarray, list[str]]:
-    """
-    Compute mean cosine similarity between every pair of culture groups.
-    Returns (N×N matrix, list of group labels).
-
-    Mirrors the 24×24 profile similarity matrix from analyzing-persona-effects-mllm.
-    """
     _require_single_condition(df, "compute_culture_sim_matrix")
     groups = sorted(df[group_col].unique())
     df = df.copy()
@@ -160,13 +127,6 @@ def compute_image_conditioned_culture_sim(
     embeddings: np.ndarray,
     group_col: str = "culture",
 ) -> tuple[np.ndarray, list[str]]:
-    """
-    Image-conditioned cross-culture similarity matrix.
-    For each image, compute per-group mean embeddings, then average the pairwise
-    cosine similarities across images. Controls for visual content variation.
-
-    Returns (N×N matrix, list of group labels).
-    """
     _require_single_condition(df, "compute_image_conditioned_culture_sim")
     groups = sorted(df[group_col].unique())
     df = df.copy()
@@ -206,10 +166,6 @@ def compute_image_conditioned_culture_sim(
 
 
 def cluster_order(matrix: np.ndarray) -> np.ndarray:
-    """
-    Ward hierarchical clustering on 1-cosine distance for heatmap ordering.
-    Returns permutation indices.
-    """
     dist = 1.0 - matrix
     np.fill_diagonal(dist, 0.0)
     dist = np.clip(dist, 0, None)

@@ -1,11 +1,4 @@
-"""
-Load and structure cultural annotation outputs.
-
-Adapts analyzing-persona-effects-mllm/src/data_loading.py:
-  - "persona_id" → "culture"
-  - "profile"    → "(culture, model_name)"
-  - Demographic columns replaced by culture + model_name columns.
-"""
+"""Load and structure cultural annotation outputs."""
 
 import json
 from pathlib import Path
@@ -45,23 +38,6 @@ def load_annotations(
     annotations_dir: Path | str = OUTPUT_DIR,
     conditions: list[str] | None = None,
 ) -> pd.DataFrame:
-    """Load all JSONL annotation files into a single DataFrame.
-
-    Two profile keys are derived: ``legacy_profile`` (culture and model) keeps
-    existing notebooks working, while the condition-aware ``profile`` prevents
-    rows from different conditions being grouped together accidentally.
-
-    Args:
-        model_names (list[str] | None, optional): Models to include. Defaults to MODEL_NAMES.
-        cultures (list[str] | None, optional): Cultures to include. Defaults to CULTURES.
-        annotations_dir (Path | str, optional): Root annotations directory. Defaults to OUTPUT_DIR.
-        conditions (list[str] | None, optional): Conditions to include. Defaults to all.
-
-    Returns:
-        pd.DataFrame: One row per annotation, with columns for culture, model,
-            sentiment scores, derived profile keys, and text length features.
-            Returns an empty DataFrame if no files are found.
-    """
     annotations_dir = Path(annotations_dir)
     records = []
     paths = sorted(annotations_dir.rglob("annotations.jsonl"))
@@ -158,16 +134,6 @@ def load_failures(
     annotations_dir: Path | str = OUTPUT_DIR,
     conditions: list[str] | None = None,
 ) -> pd.DataFrame:
-    """Load annotation failure records for quality analysis.
-
-    Args:
-        model_names (list[str] | None, optional): Models to include. Defaults to MODEL_NAMES.
-        cultures (list[str] | None, optional): Cultures to include. Defaults to CULTURES.
-        annotations_dir (Path | str, optional): Root annotations directory. Defaults to OUTPUT_DIR.
-
-    Returns:
-        pd.DataFrame: Failure records, or an empty DataFrame if none exist.
-    """
     annotations_dir = Path(annotations_dir)
     records = []
     for jsonl_path in sorted(annotations_dir.rglob("*failure*.jsonl")):
@@ -195,14 +161,5 @@ def load_failures(
 
 
 def parse_failure_rate(df: pd.DataFrame, failures: pd.DataFrame) -> float:
-    """Compute the fraction of annotation attempts that failed to parse.
-
-    Args:
-        df (pd.DataFrame): Successfully parsed annotations.
-        failures (pd.DataFrame): Failed annotation records.
-
-    Returns:
-        float: failures / (successes + failures), or 0.0 if both are empty.
-    """
     total = len(df) + len(failures)
     return len(failures) / total if total > 0 else 0.0

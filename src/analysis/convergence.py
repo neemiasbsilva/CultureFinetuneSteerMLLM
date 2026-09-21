@@ -1,17 +1,4 @@
-"""
-Per-image convergence metrics across cultural annotation outputs.
-
-Adapted from analyzing-persona-effects-mllm/src/convergence.py.
-Computes three complementary dimensions per image:
-  1. caption_sim       — mean cosine similarity of captions across culture models
-  2. sentiment_agreement — proportion of culture-model pairs with identical prediction
-  3. label_jaccard     — mean pairwise Jaccard of predicted_perceptions tag sets
-
-Usage:
-    from src.analysis.convergence import compute_convergence
-    conv_df = compute_convergence(df, caption_embeddings)
-    conv_df.to_csv("outputs/analysis/convergence_all_dimensions.csv", index=False)
-"""
+"""Per-image convergence metrics across cultural annotation outputs."""
 
 import hashlib
 from typing import Any
@@ -34,10 +21,6 @@ def jaccard(set_a: set[str], set_b: set[str]) -> float:
 
 
 def compute_sentiment_agreement(df: pd.DataFrame) -> pd.DataFrame:
-    """
-    Per-image proportion of (culture_model) pairs sharing the same
-    predicted_sentiment label.
-    """
     group_keys = (["condition"] if "condition" in df.columns else []) + ["image_id"]
     rows = []
     for keys, grp in df.groupby(group_keys):
@@ -77,9 +60,6 @@ def compute_sentiment_agreement(df: pd.DataFrame) -> pd.DataFrame:
 
 
 def compute_label_jaccard(df: pd.DataFrame) -> pd.DataFrame:
-    """
-    Per-image mean pairwise Jaccard similarity of predicted_perceptions tag sets.
-    """
     group_keys = (["condition"] if "condition" in df.columns else []) + ["image_id"]
     rows = []
     for keys, grp in df.groupby(group_keys):
@@ -108,13 +88,6 @@ def compute_convergence(
     caption_embeddings: np.ndarray,
     justification_embeddings: np.ndarray | None = None,
 ) -> pd.DataFrame:
-    """
-    Merge all convergence dimensions into one DataFrame per image.
-
-    Columns:
-        image_id, caption_sim, sentiment_agreement, majority_sentiment,
-        label_jaccard, n_models [, justification_sim]
-    """
     caption_sim_df = compute_per_image_similarity(df, caption_embeddings, group_col="culture")
     caption_sim_df = caption_sim_df.rename(
         columns={"sim_mean": "caption_sim", "sim_std": "caption_sim_std"}
@@ -149,14 +122,6 @@ def compute_condition_pair_agreement(
     n_bootstrap: int = 0,
     seed: int = 42,
 ) -> pd.DataFrame:
-    """Compare matched per-image outputs across experimental conditions.
-
-    ``df`` should contain one aggregated row per model/culture/condition/image.
-    ``caption_embeddings`` must be row-aligned semantic embeddings.  Requiring
-    them avoids silently substituting lexical TF-IDF similarity for the
-    preregistered caption-cosine metric.
-    """
-
     if caption_embeddings is None:
         raise ValueError("caption_embeddings are required for semantic caption cosine similarity")
     condition_pairs = condition_pairs or DEFAULT_CONDITION_PAIRS

@@ -1,15 +1,4 @@
-"""
-Sentence-BERT embeddings with .npy caching.
-
-Adapted directly from analyzing-persona-effects-mllm/src/embeddings.py.
-Handles the larger scale of this dataset (42,780 records vs 59,708 in
-mllm-persona-evaluation, comparable size).
-
-Usage:
-    from src.analysis.embeddings import EmbeddingManager
-    em = EmbeddingManager(model_name="sentence-transformers/all-MiniLM-L6-v2")
-    em.encode_column(df, "caption", cache_path="outputs/analysis/caption_embs_qwen_vl.npy")
-"""
+"""Sentence-BERT embeddings with .npy caching."""
 
 from __future__ import annotations
 
@@ -24,8 +13,6 @@ if TYPE_CHECKING:
 
 
 class EmbeddingManager:
-    """Encode text columns with Sentence-BERT; cache results to disk."""
-
     def __init__(
         self,
         model_name: str = "sentence-transformers/all-MiniLM-L6-v2",
@@ -43,10 +30,6 @@ class EmbeddingManager:
         return self._model
 
     def encode(self, texts: list[str], cache_path: str | Path | None = None) -> np.ndarray:
-        """
-        Encode texts; load from cache if available.
-        Returns array of shape (N, embedding_dim).
-        """
         if cache_path:
             cache_path = Path(cache_path)
             if cache_path.exists():

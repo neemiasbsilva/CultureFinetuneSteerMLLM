@@ -1,14 +1,4 @@
-"""
-BERTopic topic modeling on cultural annotation captions and justifications.
-
-Adapted from analyzing-persona-effects-mllm/src/topic_modeling.py.
-Hyperparameters preserved from prior work for comparability.
-
-Usage:
-    from src.analysis.topic_modeling import fit_bertopic, topic_culture_proportions
-    model, topics, probs = fit_bertopic(df["caption"].tolist(), caption_embeddings)
-    heatmap_df = topic_culture_proportions(df, topics)
-"""
+"""BERTopic topic modeling on cultural annotation captions and justifications."""
 
 import numpy as np
 import pandas as pd
@@ -33,10 +23,6 @@ def fit_bertopic(
     min_df: int = BERTOPIC_MIN_DF,
     seed: int = 42,
 ) -> tuple[BERTopic, list[int], np.ndarray | None]:
-    """
-    Fit BERTopic on pre-computed embeddings.
-    Returns (model, topics, probabilities).
-    """
     umap_model = UMAP(
         n_components=n_components,
         n_neighbors=n_neighbors,
@@ -68,10 +54,6 @@ def topic_sentiment_composition(
     topics: list[int],
     sentiment_col: str = "predicted_sentiment",
 ) -> pd.DataFrame:
-    """
-    Normalised sentiment composition per topic (column-normalised).
-    Mirrors the topic×sentiment heatmap from analyzing-persona-effects-mllm.
-    """
     df = df.copy()
     df["topic"] = topics
     index = [df["condition"], df["topic"]] if "condition" in df.columns else df["topic"]
@@ -84,10 +66,6 @@ def topic_culture_proportions(
     topics: list[int],
     culture_col: str = "culture",
 ) -> pd.DataFrame:
-    """
-    Column-normalised topic × culture proportions.
-    Novel: replaces topic × persona matrix from analyzing-persona-effects-mllm.
-    """
     df = df.copy()
     df["topic"] = topics
     columns = [df["condition"], df[culture_col]] if "condition" in df.columns else df[culture_col]
@@ -96,7 +74,6 @@ def topic_culture_proportions(
 
 
 def save_topic_info(model: BERTopic, output_path: str, n_words: int = 10) -> pd.DataFrame:
-    """Save topic metadata to CSV."""
     info: pd.DataFrame = model.get_topic_info()
     info.to_csv(output_path, index=False)
     return info
