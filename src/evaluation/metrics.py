@@ -1,9 +1,4 @@
-"""
-Training evaluation metrics for CultureVLM fine-tuning.
-
-Computes per-fold classification quality (macro-F1, MAE, QWK) used as
-input to the Holm-Bonferroni statistical comparison across conditions.
-"""
+"""Training evaluation metrics for CultureVLM fine-tuning."""
 
 from typing import Any
 
@@ -18,7 +13,6 @@ from sklearn.metrics import (
 
 
 def compute_classification_metrics(y_true: list[int], y_pred: list[int]) -> dict[str, Any]:
-    """Primary metrics used in Holm-Bonferroni comparisons."""
     valid = [(t, p) for t, p in zip(y_true, y_pred, strict=False) if t >= 0 and p >= 0]
     if not valid:
         return {
@@ -45,10 +39,6 @@ def compute_classification_metrics(y_true: list[int], y_pred: list[int]) -> dict
 
 
 def aggregate_fold_metrics(fold_records: list[dict[str, Any]]) -> dict[str, float]:
-    """
-    Aggregate per-fold metric records into mean ± std.
-    Input: list of dicts from compute_classification_metrics (one per fold).
-    """
     if not fold_records:
         return {}
     keys = [k for k in fold_records[0] if isinstance(fold_records[0][k], float)]
@@ -61,12 +51,6 @@ def aggregate_fold_metrics(fold_records: list[dict[str, Any]]) -> dict[str, floa
 
 
 def build_fold_metrics_csv(results: list[dict[str, Any]], output_path: str) -> pd.DataFrame:
-    """
-    Build the fold_metrics.csv consumed by statistical_tests.py.
-
-    Expected result schema per entry:
-        {model_name, culture, condition, fold, f1_macro, f1_weighted, mae, qwk, accuracy}
-    """
     df = pd.DataFrame(results)
     df.to_csv(output_path, index=False)
     return df

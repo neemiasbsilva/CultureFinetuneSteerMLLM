@@ -1,27 +1,4 @@
-"""
-Holm-Bonferroni corrected paired t-tests across culture × model × condition.
-
-Extends ../multimodal-LLMs-see-sentiment/scripts/statistical_tests.py
-with the additional comparison dimensions required by CultureVLM.
-
-Comparison dimensions (162 total at full scale):
-  Dim 1: cultural_model vs. baseline_model  (9 cultures × 3 architectures = 27)
-  Dim 2: cross-architecture within cultural  (C(3,2) × 9 cultures = 27)
-  Dim 3: cross-culture within architecture   (C(9,2) × 3 architectures = 108)
-
-Primary metric: fold-wise val macro-F1 (5 observations per comparison).
-
-Usage:
-    uv run python src/evaluation/statistical_tests.py \
-        --fold-metrics outputs/training/fold_metrics.csv \
-        --metric f1_macro \
-        --output outputs/training/stats/holm_ttests
-
-    # Significant comparisons only:
-    uv run python src/evaluation/statistical_tests.py \
-        --fold-metrics outputs/training/fold_metrics.csv \
-        --significant-only
-"""
+"""Holm-Bonferroni corrected paired t-tests across culture × model × condition."""
 
 import argparse
 import itertools
@@ -41,15 +18,6 @@ ALPHA = 0.05
 
 
 def load_fold_metrics(path: str, metric: str) -> dict[tuple[str, str, str], list[float]]:
-    """Load per-fold metric values grouped by (model_name, culture, condition).
-
-    Args:
-        path (str): Path to fold_metrics.csv.
-        metric (str): Column name to extract (e.g., "f1_macro").
-
-    Returns:
-        dict: {(model_name, culture, condition): [fold_1_value, ..., fold_N_value]}
-    """
     df = pd.read_csv(path)
     groups: dict[tuple[str, str, str], list[float]] = {}
     for _, row in df.iterrows():
@@ -61,12 +29,6 @@ def load_fold_metrics(path: str, metric: str) -> dict[tuple[str, str, str], list
 def run_all_comparisons(
     groups: dict[tuple[str, str, str], list[float]], alpha: float = ALPHA
 ) -> list[dict[str, Any]]:
-    """Run all pairwise t-tests and collect raw p-values.
-
-    Only pairs that differ on exactly one dimension (model, culture, or
-    condition) are compared; pairs differing on more than one dimension are
-    skipped because their difference cannot be attributed to a single factor.
-    """
     comparisons: list[dict[str, Any]] = []
     keys = list(groups.keys())
 
@@ -116,12 +78,6 @@ def run_all_comparisons(
 def apply_holm_bonferroni(
     comparisons: list[dict[str, Any]], alpha: float = ALPHA
 ) -> list[dict[str, Any]]:
-    """Apply Holm-Bonferroni correction in-place; returns sorted list.
-
-    Holm adjusted p-values are the cumulative maximum of the step-down
-    products.  Omitting that monotonicity step can make a less significant
-    comparison receive a smaller adjusted p-value than an earlier one.
-    """
     if not comparisons:
         return comparisons
     comparisons = sorted(comparisons, key=lambda x: x["p_raw"])

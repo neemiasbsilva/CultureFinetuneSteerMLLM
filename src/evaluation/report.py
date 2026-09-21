@@ -7,7 +7,6 @@ import pandas as pd
 
 
 def make_accuracy_table(agreement_csv: str, output_tex: str) -> str:
-    """LaTeX table of macro-F1 / kappa per condition/culture/model."""
     df = pd.read_csv(agreement_csv)
     if "condition" not in df:
         df["condition"] = "legacy_unspecified"
@@ -40,7 +39,6 @@ def make_accuracy_table(agreement_csv: str, output_tex: str) -> str:
 
 
 def make_convergence_summary(convergence_csv: str, output_tex: str) -> str:
-    """LaTeX table of convergence metrics without pooling conditions."""
     df = pd.read_csv(convergence_csv)
     if "condition" not in df:
         df["condition"] = "legacy_unspecified"

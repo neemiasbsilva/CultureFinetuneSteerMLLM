@@ -1,10 +1,4 @@
-"""Stage-4 evaluation of matched base/WVS annotation runs.
-
-Repeated generations are reduced to one prediction per image using a
-deterministic mode rule.  Every condition is then evaluated on the same valid
-image set, and uncertainty/comparisons resample paired images rather than raw
-generation rows.
-"""
+"""Stage-4 evaluation of matched base/WVS annotation runs."""
 
 from __future__ import annotations
 
@@ -63,8 +57,6 @@ SHARED_MODELS = ("gemma4_e2b", "gemma4_e4b", "qwen3_vl_8b", "gemma4_31b")
 
 
 def load_ground_truth(path: str | Path | None = None) -> dict[str, int]:
-    """Load the sigma3-P5 reference label keyed by string image ID."""
-
     df = pd.read_csv(path or AGREEMENT_CSV, index_col=0)
     df = df.rename(columns={"id": "image_id"})
     return dict(zip(df["image_id"].astype(str), df["sentiment"].astype(int), strict=True))
@@ -85,8 +77,6 @@ def _annotation_files(root: Path, include_failures: bool) -> list[tuple[Path, bo
 
 
 def _path_metadata(path: Path, root: Path) -> dict[str, str]:
-    """Best-effort metadata for legacy and condition-subdirectory layouts."""
-
     try:
         parts = path.relative_to(root).parts
     except ValueError:
@@ -108,13 +98,6 @@ def load_annotations(
     *,
     include_failures: bool = True,
 ) -> pd.DataFrame:
-    """Load annotation attempts from legacy or condition-aware layouts.
-
-    A later successful record wins over an earlier failure with the same
-    annotation ID.  Legacy ``condition='cultural'`` rows are normalized to
-    ``wvs_cultural`` at the boundary.
-    """
-
     root = Path(annotations_dir)
     by_id: dict[str, dict[str, Any]] = {}
     anonymous: list[dict[str, Any]] = []
@@ -184,8 +167,6 @@ def load_annotations(
 
 
 def mode_with_median_tiebreak(values: Iterable[int | float]) -> int:
-    """Mode; ties go closest to the sample median, then to the lower label."""
-
     array = np.asarray(list(values), dtype=float)
     array = array[np.isfinite(array)]
     if array.size == 0:
@@ -200,8 +181,6 @@ def aggregate_repetitions(
     annotations: pd.DataFrame,
     gt: dict[str, int] | None = None,
 ) -> pd.DataFrame:
-    """Reduce repeated passes to one deterministic row per image/condition."""
-
     if annotations.empty:
         return pd.DataFrame()
     df = annotations.copy()
@@ -252,7 +231,6 @@ def incomplete_pass_groups(
     annotations: pd.DataFrame,
     expected_runs: int = 5,
 ) -> pd.DataFrame:
-    """List model/culture/condition/images missing any planned pass index."""
     expected = set(range(1, expected_runs + 1))
     rows: list[dict[str, object]] = []
     keys = ["model_name", "culture", "condition", "image_id"]
@@ -273,7 +251,6 @@ def incomplete_pass_groups(
 
 
 def assert_matched_generation_seeds(annotations: pd.DataFrame) -> None:
-    """Fail if a model/image/pass used different planned seeds by condition."""
     if "seed" not in annotations or annotations["seed"].isna().all():
         return
     work = annotations.dropna(subset=["seed"]).copy()
@@ -290,7 +267,6 @@ def attempted_panel_violations(
     conditions: Sequence[str],
     expected_cultures: Sequence[str] | None = None,
 ) -> pd.DataFrame:
-    """Report condition arms that did not attempt the identical image set."""
     wanted = [normalize_condition(value) for value in conditions]
     trained = [value for value in wanted if value != "inference_only"]
     rows: list[dict[str, object]] = []
@@ -333,8 +309,6 @@ def restrict_to_common_valid_images(
     panel: pd.DataFrame,
     conditions: Sequence[str],
 ) -> pd.DataFrame:
-    """Keep the intersection of valid image IDs within every model/culture."""
-
     if panel.empty:
         return panel.copy()
     wanted = [normalize_condition(value) for value in conditions]
@@ -367,13 +341,6 @@ def build_common_condition_panel(
     aggregated: pd.DataFrame,
     conditions: Sequence[str],
 ) -> pd.DataFrame:
-    """Replicate the culture-neutral base rows, then form matched panels.
-
-    Older annotation files may store duplicate base runs under culture
-    directories, so the canonical culture-neutral location is preferred
-    whenever it is present.
-    """
-
     if aggregated.empty:
         return aggregated.copy()
     wanted = [normalize_condition(value) for value in conditions]
@@ -414,8 +381,6 @@ def _safe_kappa(y_true: np.ndarray, y_pred: np.ndarray, weights: str) -> float:
 
 
 def _metrics(y_true: np.ndarray, y_pred: np.ndarray) -> dict[str, float]:
-    """All primary/secondary ordinal classification metrics."""
-
     truth = np.asarray(y_true, dtype=float)
     prediction = np.asarray(y_pred, dtype=float)
     valid = np.isfinite(truth) & np.isfinite(prediction)
@@ -439,8 +404,6 @@ def bootstrap_metrics(
     n: int = N_BOOTSTRAP,
     rng: np.random.Generator | None = None,
 ) -> dict[str, tuple[float, float, float]]:
-    """Return ``metric -> (bootstrap mean, CI low, CI high)`` by image."""
-
     truth = np.asarray(y_true)
     prediction = np.asarray(y_pred)
     if len(truth) == 0:
@@ -475,7 +438,6 @@ def encode_caption_embeddings(
     device: str | None = None,
     batch_size: int = 128,
 ) -> np.ndarray:
-    """Encode row-aligned captions with a content-addressed semantic cache."""
     digest = hashlib.sha256(model_name.encode("utf-8"))
     identity_columns = [
         "model_name",
@@ -507,8 +469,6 @@ def evaluate_metrics(
     n_bootstrap: int = N_BOOTSTRAP,
     seed: int = 42,
 ) -> pd.DataFrame:
-    """Metrics and image-bootstrap CIs for every matched condition."""
-
     rows: list[dict[str, Any]] = []
     for (model, culture, condition), group in panel.groupby(
         ["model_name", "culture", "condition"], sort=True
@@ -547,8 +507,6 @@ def paired_bootstrap_deltas(
     n: int = N_BOOTSTRAP,
     seed: int = 42,
 ) -> pd.DataFrame:
-    """Paired image-bootstrap CIs for the three planned condition contrasts."""
-
     rows: list[dict[str, Any]] = []
     for (model, culture), group in panel.groupby(["model_name", "culture"], sort=True):
         truth_by_image = group.drop_duplicates("image_id").set_index("image_id")[
@@ -603,8 +561,6 @@ def evaluate_per_fold(
     gt: dict[str, int],
     folds_dir: Path | str = FOLDS_DIR,
 ) -> pd.DataFrame:
-    """Compute fold metrics from already aggregated/common image rows."""
-
     fold_files = sorted(Path(folds_dir).glob("fold_*_val.csv"))
     if not fold_files:
         console.print("[yellow]No fold files found — skipping paired fold tests.[/yellow]")
@@ -641,8 +597,6 @@ def build_holm_comparisons(
     fold_df: pd.DataFrame,
     metric: str = "f1_macro",
 ) -> list[dict[str, Any]]:
-    """Build only the three preregistered, fold-paired condition contrasts."""
-
     if fold_df.empty:
         return []
     comparisons: list[dict[str, Any]] = []
@@ -674,12 +628,6 @@ def _corrected_resampled_t(
     values_b: Sequence[float],
     test_train_ratio: float | None = None,
 ) -> tuple[float, float]:
-    """Nadeau-Bengio corrected paired test over cross-validation folds.
-
-    The variance multiplier is ``1/n_folds + n_test/n_train``.  For disjoint
-    k-fold validation partitions the default ratio is ``1/(k - 1)``.  This is
-    deliberately more conservative than treating fold scores as independent.
-    """
     a = np.asarray(values_a, dtype=float)
     b = np.asarray(values_b, dtype=float)
     valid = np.isfinite(a) & np.isfinite(b)
@@ -702,8 +650,6 @@ def _corrected_resampled_t(
 
 
 def _holm_adjust(raw_p_values: Sequence[float] | np.ndarray) -> np.ndarray:
-    """Valid step-down Holm adjustment with monotone adjusted p-values."""
-
     raw = np.asarray(raw_p_values, dtype=float)
     raw = np.where(np.isfinite(raw), raw, 1.0)
     order = np.argsort(raw, kind="stable")
@@ -720,8 +666,6 @@ def holm_bonferroni(
     alpha: float = ALPHA,
     test_train_ratio: float | None = None,
 ) -> pd.DataFrame:
-    """Corrected paired fold tests with Holm applied separately per family."""
-
     tested: list[dict[str, Any]] = []
     for comparison in comparisons:
         statistic, p_value = _corrected_resampled_t(
@@ -764,8 +708,6 @@ def holm_bonferroni(
 
 
 def parse_coverage_table(attempts: pd.DataFrame) -> pd.DataFrame:
-    """Attempt-level parse coverage, including groups with zero valid parses."""
-
     if attempts.empty:
         return pd.DataFrame()
     rows: list[dict[str, Any]] = []
@@ -847,7 +789,6 @@ def write_evaluation_report(
     n_bootstrap: int,
     seed: int,
 ) -> None:
-    """Write a human-readable index over the complete machine-readable CSVs."""
     primary_deltas = cast(
         "pd.DataFrame",
         (
