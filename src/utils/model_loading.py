@@ -1,43 +1,4 @@
-"""Base-model loading — one place that decides how weights reach the GPU.
-
-Training and annotation used to load bases independently, and they disagreed;
-that disagreement once trained nine adapters against a corrupt forward pass.
-So: name the strategy explicitly in the config, validate it against the
-checkpoint before any weights are read, and never pass a None quantization
-config — `from_pretrained` applies that kwarg to the config object, overwriting
-the checkpoint's own `quantization_config`.
-
-Strategies (config key `training.quantization`, falling back to
-`model.quantization`):
-
-    None      immediate load at the declared dtype.
-    "4bit"    QLoRA via bitsandbytes NF4 — for BF16 checkpoints too large to
-              hold whole (gemma4_31b, qwen3_27b).
-
-Pre-quantized checkpoints are refused outright: this repository trains only
-from unquantized releases.
-
-Modalities (config key `model.modality`, default `"vision_text"`) pick the
-`Auto*` class and the processor class together, because the two must agree:
-
-    "vision_text"   AutoModelForImageTextToText + AutoProcessor.
-    "text"          AutoModelForCausalLM + AutoTokenizer — for text-only bases
-                    such as llama3_2_3b, which the WVS track can still train
-                    because its supervision is text-only.
-
-The dangerous direction is `"text"` declared against a composite checkpoint:
-the text-only class drops the vision tower without a word, so it is refused
-here rather than discovered in the adapter. The reverse cannot be proven from
-config metadata alone — the composite families do not agree on where the vision
-section lives — and `from_pretrained` already refuses it loudly.
-
-A chat template is part of the same contract: WVS records are chat-format, so a
-base whose tokenizer carries no template cannot render them at all, and a base
-whose template was written for another purpose renders them into something the
-config does not describe. `model.chat_template` points at a Jinja file that
-replaces whatever the checkpoint ships, and training refuses to start when
-neither is present.
-"""
+"""Base-model loading — one place that decides how weights reach the GPU."""
 
 from __future__ import annotations
 
@@ -61,27 +22,12 @@ _DTYPES: dict[str, torch.dtype] = {
 
 
 class ModelConfigError(ValueError):
-    """A model config cannot be loaded safely as written."""
+    pass
 
 
 def resolve_quantization(
     model_cfg: dict[str, Any], train_cfg: dict[str, Any] | None = None
 ) -> str | None:
-    """Return the declared quantization strategy.
-
-    `training.quantization` is where `"4bit"` has always lived; `model.quantization`
-    is accepted so inference-side configs need no `training` section.
-
-    Args:
-        model_cfg (dict): `model` section of the config.
-        train_cfg (dict | None): `training` section, if the config has one.
-
-    Returns:
-        str | None: One of QUANTIZATION_STRATEGIES.
-
-    Raises:
-        ModelConfigError: If the declared value is not a known strategy.
-    """
     declared = (train_cfg or {}).get("quantization", model_cfg.get("quantization"))
     if declared in (None, "", "none"):
         return None
@@ -95,17 +41,6 @@ def resolve_quantization(
 
 
 def resolve_dtype(model_cfg: dict[str, Any]) -> torch.dtype:
-    """Map the config's `dtype` string onto a torch dtype.
-
-    Args:
-        model_cfg (dict): `model` section of the config.
-
-    Returns:
-        torch.dtype: The declared compute dtype.
-
-    Raises:
-        ModelConfigError: If `dtype` is missing, "auto", or unrecognised.
-    """
     declared = model_cfg.get("dtype")
     if declared == "auto":
         raise ModelConfigError(
@@ -125,18 +60,6 @@ def resolve_dtype(model_cfg: dict[str, Any]) -> torch.dtype:
 
 
 def resolve_modality(model_cfg: dict[str, Any]) -> str:
-    """Return the declared input modality.
-
-    Args:
-        model_cfg (dict): `model` section of the config.
-
-    Returns:
-        str: One of MODALITIES; DEFAULT_MODALITY when the key is omitted, which
-            keeps every config written before text-only bases existed valid.
-
-    Raises:
-        ModelConfigError: If the declared value is not a known modality.
-    """
     declared = model_cfg.get("modality", DEFAULT_MODALITY)
     if declared not in MODALITIES:
         known = ", ".join(repr(m) for m in MODALITIES)
@@ -148,18 +71,6 @@ def resolve_modality(model_cfg: dict[str, Any]) -> str:
 
 
 def auto_class_for_modality(modality: str) -> Any:
-    """Return the `Auto*` class that loads a checkpoint of this modality.
-
-    Args:
-        modality (str): A value from MODALITIES.
-
-    Returns:
-        Any: `AutoModelForCausalLM` for "text", `AutoModelForImageTextToText`
-            otherwise.
-
-    Raises:
-        ModelConfigError: If the modality is not a known one.
-    """
     from transformers import AutoModelForCausalLM, AutoModelForImageTextToText
 
     if modality == "text":
@@ -170,12 +81,6 @@ def auto_class_for_modality(modality: str) -> Any:
 
 
 def _checkpoint_config(model_id: str) -> Any | None:
-    """Read a checkpoint's config metadata, or None when it cannot be read.
-
-    No weights are downloaded or allocated. A config that cannot be read at
-    all — offline, gated, or not yet downloaded — yields None, since validation
-    cannot speak to a checkpoint it cannot see.
-    """
     try:
         return AutoConfig.from_pretrained(model_id, trust_remote_code=True)
     except Exception:
@@ -183,15 +88,6 @@ def _checkpoint_config(model_id: str) -> Any | None:
 
 
 def checkpoint_is_composite(model_id: str) -> bool | None:
-    """Return whether a checkpoint carries a vision section, or None if unreadable.
-
-    Args:
-        model_id (str): HF repo id or local path.
-
-    Returns:
-        bool | None: True when the config declares a vision sub-config, False
-            when it does not, None when the config cannot be read.
-    """
     config = _checkpoint_config(model_id)
     if config is None:
         return None
@@ -199,23 +95,6 @@ def checkpoint_is_composite(model_id: str) -> bool | None:
 
 
 def validate_modality(model_id: str, model_cfg: dict[str, Any]) -> str:
-    """Fail before loading if the declared modality would silently drop weights.
-
-    Only the `"text"`-against-a-composite-checkpoint direction is refused: it is
-    the one that loads successfully while leaving the vision tower behind. The
-    reverse is left to `from_pretrained`, which refuses a text-only checkpoint
-    under the composite class by name.
-
-    Args:
-        model_id (str): HF repo id or local path.
-        model_cfg (dict): `model` section of the config.
-
-    Returns:
-        str: The validated modality.
-
-    Raises:
-        ModelConfigError: If the declared modality contradicts the checkpoint.
-    """
     modality = resolve_modality(model_cfg)
     if modality == "text" and checkpoint_is_composite(model_id) is True:
         raise ModelConfigError(
@@ -228,18 +107,6 @@ def validate_modality(model_id: str, model_cfg: dict[str, Any]) -> str:
 
 
 def checkpoint_quant_method(model_id: str) -> str | None:
-    """Return the `quant_method` baked into a checkpoint, if it is pre-quantized.
-
-    Reads config metadata only — no weights are downloaded or allocated. A config
-    that cannot be read at all — offline, gated, or not yet downloaded — also yields
-    None, since validation cannot speak to a checkpoint it cannot see.
-
-    Args:
-        model_id (str): HF repo id or local path.
-
-    Returns:
-        str | None: e.g. "fp8", or None for an unquantized checkpoint.
-    """
     config = _checkpoint_config(model_id)
     if config is None:
         return None
@@ -254,23 +121,6 @@ def checkpoint_quant_method(model_id: str) -> str | None:
 def validate_base_model_config(
     model_id: str, model_cfg: dict[str, Any], train_cfg: dict[str, Any] | None = None
 ) -> str | None:
-    """Fail before loading if the config cannot load the checkpoint faithfully.
-
-    Catches the two ways this has gone wrong: an unusable `dtype`, and a
-    pre-quantized checkpoint, which no declared strategy can load faithfully.
-
-    Args:
-        model_id (str): HF repo id or local path.
-        model_cfg (dict): `model` section of the config.
-        train_cfg (dict | None): `training` section, if any.
-
-    Returns:
-        str | None: The validated quantization strategy.
-
-    Raises:
-        ModelConfigError: If the combination would load something other than what
-            the config describes.
-    """
     resolve_dtype(model_cfg)
     strategy = resolve_quantization(model_cfg, train_cfg)
     embedded = checkpoint_quant_method(model_id)
@@ -288,19 +138,6 @@ def validate_base_model_config(
 
 
 def load_processor(model_id: str, modality: str, *, trust_remote_code: bool = True) -> Any:
-    """Load the text/image front-end that matches the modality.
-
-    A text-only checkpoint has no `AutoProcessor` to load — asking for one
-    raises or, worse, hands back a bare tokenizer wearing a processor's name.
-
-    Args:
-        model_id (str): HF repo id or local path.
-        modality (str): A value from MODALITIES.
-        trust_remote_code (bool): Passed through to `from_pretrained`.
-
-    Returns:
-        Any: An `AutoProcessor` for "vision_text", an `AutoTokenizer` for "text".
-    """
     from transformers import AutoProcessor, AutoTokenizer
 
     if modality == "text":
@@ -311,34 +148,10 @@ def load_processor(model_id: str, modality: str, *, trust_remote_code: bool = Tr
 
 
 def processor_tokenizer(processor: Any) -> Any:
-    """Return the tokenizer inside a processor, or the tokenizer itself.
-
-    Args:
-        processor (Any): An `AutoProcessor` or an `AutoTokenizer`.
-
-    Returns:
-        Any: The tokenizer that owns the vocabulary and the chat template.
-    """
     return getattr(processor, "tokenizer", processor)
 
 
 def apply_chat_template_file(processor: Any, template_path: str | Path) -> str:
-    """Replace the checkpoint's chat template with the one named by the config.
-
-    Set on both the processor and its tokenizer: the trainer renders through
-    whichever of the two it was handed, and a template on only one of them
-    means the rendered text depends on that choice.
-
-    Args:
-        processor (Any): An `AutoProcessor` or an `AutoTokenizer`.
-        template_path (str | Path): Jinja file, relative to the repository root.
-
-    Returns:
-        str: The template source that was applied.
-
-    Raises:
-        ModelConfigError: If the file does not exist or is empty.
-    """
     path = Path(template_path)
     if not path.is_file():
         raise ModelConfigError(
@@ -356,20 +169,6 @@ def apply_chat_template_file(processor: Any, template_path: str | Path) -> str:
 
 
 def configured_chat_template(model_name: str, config_dir: str | Path = "configs") -> Path | None:
-    """Look up the template a model's training config installs, if it declares one.
-
-    Annotation loads its processor from the hub id rather than from the training
-    config, so without this the two paths render the same records differently and
-    an adapter is scored under a template it was never fitted under.
-
-    Args:
-        model_name (str): Registered model name, matching its config file stem.
-        config_dir (str | Path): Directory holding the training configs.
-
-    Returns:
-        Path | None: The declared template path, or None if the config declares
-            none or does not exist.
-    """
     import yaml
 
     config_path = Path(config_dir) / f"{model_name}.yaml"
@@ -381,19 +180,6 @@ def configured_chat_template(model_name: str, config_dir: str | Path = "configs"
 
 
 def require_chat_template(processor: Any, model_id: str) -> None:
-    """Refuse to train a chat-format dataset through a base that cannot render it.
-
-    Base (non-instruct) releases frequently ship no template at all, and the
-    failure without this check arrives deep inside the collator, after the
-    weights are already resident.
-
-    Args:
-        processor (Any): An `AutoProcessor` or an `AutoTokenizer`.
-        model_id (str): HF repo id or local path, for the message.
-
-    Raises:
-        ModelConfigError: If neither the processor nor its tokenizer has one.
-    """
     tokenizer = processor_tokenizer(processor)
     if getattr(tokenizer, "chat_template", None) or getattr(processor, "chat_template", None):
         return
@@ -414,21 +200,6 @@ def build_base_model(
     attn_implementation: str | None = None,
     trust_remote_code: bool = True,
 ) -> Any:
-    """Load a base model onto `device` under the given quantization strategy.
-
-    Args:
-        model_id (str): HF repo id or local path.
-        auto_class (Any): The `Auto*` class to load with, e.g.
-            `AutoModelForImageTextToText`.
-        quantization (str | None): A value from QUANTIZATION_STRATEGIES.
-        dtype (torch.dtype): Compute dtype.
-        device (str): "cuda", "mps", or "cpu".
-        attn_implementation (str | None): Passed through when set.
-        trust_remote_code (bool): Passed through to `from_pretrained`.
-
-    Returns:
-        Any: The loaded model, on `device`.
-    """
     kwargs: dict[str, Any] = {"trust_remote_code": trust_remote_code}
     if attn_implementation is not None:
         kwargs["attn_implementation"] = attn_implementation
