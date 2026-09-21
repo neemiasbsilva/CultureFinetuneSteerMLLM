@@ -1,10 +1,4 @@
-"""Push completed LoRA checkpoints to the Hugging Face Hub collection repo.
-
-Usage:
-    uv run python src/hub/push.py status
-    uv run python src/hub/push.py push --dry-run
-    uv run python src/hub/push.py push --cultures english german --models qwen3_5_2b
-"""
+"""Push completed LoRA checkpoints to the Hugging Face Hub collection repo."""
 
 from __future__ import annotations
 
@@ -56,11 +50,56 @@ class Checkpoint:
         return f"{self.culture}/{self.backbone}/{self.problem}"
 
 
+@dataclass(frozen=True)
+class ProblemCard:
+    title: str
+    summary: str
+    tags: tuple[str, ...]
+
+
+PROBLEM_CARDS: dict[str, ProblemCard] = {
+    "cultural": ProblemCard(
+        title="culture-steering LoRA",
+        summary=(
+            "fine-tuned on World Values Survey question/answer text under a\n"
+            "`{culture}` system prompt, following the CultureLLM (Li et al.,\n"
+            "NeurIPS 2024) recipe extended into the multimodal domain."
+        ),
+        tags=("culture-steering",),
+    ),
+    "distributional": ProblemCard(
+        title="distributional LoRA",
+        summary=(
+            "fine-tuned to reproduce country-level World Values Survey (Wave 7)\n"
+            "response distributions for the 46 countries named in its prompts, with\n"
+            "the first-token KL objective and training recipe of Cao et al.\n"
+            "(NAACL 2025, arXiv 2502.07068). `{culture}` marks the one adapter shared\n"
+            "by every country rather than a culture."
+        ),
+        tags=("survey-response-distributions",),
+    ),
+}
+GENERIC_CARD = ProblemCard(
+    title="LoRA",
+    summary="fine-tuned under the `{problem}` objective; see the repository for the recipe.",
+    tags=(),
+)
+
+
+def problem_card(problem: str) -> ProblemCard:
+    return PROBLEM_CARDS.get(problem, GENERIC_CARD)
+
+
+def track_config_path(config_dir: Path, backbone: str, problem: str) -> Path:
+    candidates = [config_dir / f"{backbone}_{problem}.yaml"]
+    if problem.startswith("yfcc"):
+        candidates.append(config_dir / f"{backbone}_yfcc.yaml")
+    candidates.append(config_dir / f"{backbone}.yaml")
+    return next((path for path in candidates if path.is_file()), candidates[-1])
+
+
 def _load_config(config_dir: Path, backbone: str, problem: str) -> dict[str, Any]:
-    yfcc_config = config_dir / f"{backbone}_yfcc.yaml"
-    use_yfcc = problem.startswith("yfcc") and yfcc_config.is_file()
-    config_path = yfcc_config if use_yfcc else config_dir / f"{backbone}.yaml"
-    with open(config_path) as handle:
+    with open(track_config_path(config_dir, backbone, problem)) as handle:
         return cast(dict[str, Any], yaml.safe_load(handle))
 
 
@@ -88,28 +127,27 @@ def discover(
 
 def render_model_card(ckpt: Checkpoint) -> str:
     target_modules = ", ".join(f"`{m}`" for m in ckpt.lora.get("target_modules", []))
+    card = problem_card(ckpt.problem)
+    summary = card.summary.format(culture=ckpt.culture, problem=ckpt.problem)
+    tags = "\n".join(f"- {tag}" for tag in ("lora", "culture-mllm", *card.tags))
     return f"""---
 base_model: {ckpt.base_model_id}
 library_name: peft
 tags:
-- lora
-- culture-mllm
-- culture-steering
+{tags}
 - culture:{ckpt.culture}
 pipeline_tag: text-generation
 ---
 
-# {ckpt.backbone} — {ckpt.culture} (culture-steering LoRA)
+# {ckpt.backbone} — {ckpt.culture} ({card.title})
 
 Part of the [Culture-Steering-MLLM-Collection]\
 (https://huggingface.co/{DEFAULT_REPO_ID}), one adapter per
-(culture, backbone) pair from
+(culture, backbone, problem) triple from
 [culture-mllm](https://github.com/neemiasbsilva/culture-mllm).
 
 This is a LoRA adapter for [{ckpt.base_model_id}](https://huggingface.co/{ckpt.base_model_id}),
-fine-tuned on World Values Survey question/answer text under a
-`{ckpt.culture}` system prompt, following the CultureLLM (Li et al.,
-NeurIPS 2024) recipe extended into the multimodal domain.
+{summary}
 
 ## Usage
 
@@ -172,6 +210,10 @@ Source: [culture-mllm](https://github.com/neemiasbsilva/culture-mllm).
 Every adapter lives under `{{culture}}/{{backbone}}/{{problem}}` in this repo,
 e.g. `english/qwen3_5_2b/cultural`. Load with `PeftModel.from_pretrained(...,
 subfolder="english/qwen3_5_2b/cultural")`.
+
+The `distributional` problem holds one adapter per backbone under the
+pseudo-culture `global`: country-level WVS response distributions for 46
+countries, trained with the first-token KL objective of Cao et al. (NAACL 2025).
 
 ## Coverage
 
