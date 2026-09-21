@@ -88,6 +88,55 @@ def raw_survey_record() -> Callable[..., dict[str, Any]]:
     return _raw_survey_record
 
 
+SUBPOP_STEERING_ENTRIES: list[dict[str, str]] = [
+    {
+        "attribute": "POLIDEOLOGY",
+        "qa_prompt": "In general, would you describe your political views as",
+        "options": "['Very conservative', 'Conservative', 'Moderate', 'Liberal', 'Very liberal']",
+    },
+    {
+        "attribute": "SEX",
+        "qa_prompt": "What is the sex that you were assigned at birth?",
+        "options": "['Male', 'Female']",
+    },
+]
+
+
+def _raw_subpop_record(
+    qkey: str = "REASONGUND_W26",
+    attribute: str = "POLIDEOLOGY",
+    group: str = "Liberal",
+    question: str = (
+        "Please indicate whether the following is a major reason, a minor reason, or not "
+        "a reason why you own a gun. As part of a gun collection"
+    ),
+    options: tuple[str, ...] = ("Major reason", "Minor reason", "Not a reason", "Refused"),
+    responses: tuple[float, ...] = (0.1, 0.3, 0.6),
+    refusal_rate: float = 0.02,
+    ordinal: tuple[float, ...] | None = None,
+) -> dict[str, Any]:
+    return {
+        "qkey": qkey,
+        "attribute": attribute,
+        "group": group,
+        "question": question,
+        "options": list(options),
+        "responses": list(responses),
+        "refusal_rate": refusal_rate,
+        "ordinal": list(ordinal) if ordinal is not None else [1.0] * len(responses),
+    }
+
+
+@pytest.fixture
+def raw_subpop_record() -> Callable[..., dict[str, Any]]:
+    return _raw_subpop_record
+
+
+@pytest.fixture
+def subpop_steering_entries() -> list[dict[str, str]]:
+    return [dict(entry) for entry in SUBPOP_STEERING_ENTRIES]
+
+
 class FakeLogitsModel:
     def __init__(self, logits: Any, *, supports_logits_to_keep: bool = True) -> None:
         self.logits = logits
