@@ -13,17 +13,23 @@
 ![mypy](https://img.shields.io/badge/mypy-strict-2A6DB2)
 ![tests](https://img.shields.io/badge/tests-592%20passing-4c1)
 
-Extends [CultureLLM](https://arxiv.org/pdf/2402.10946) (Li et al., NeurIPS 2024)
-to multimodal models. Each architecture is LoRA fine-tuned into ten cultures on
-World Values Survey text. It then annotates the σ₃P₅ urban image set under a
-neutral prompt, which tests whether the persona effects seen with
+This repository complements *Population Fidelity: Evaluating Population
+Representativeness in LLMs*, which is under review. It trains the
+culture-finetuned adapters that the main repository evaluates in its cultural
+experiment, and extends [CultureLLM](https://arxiv.org/pdf/2402.10946) (Li et
+al., NeurIPS 2024) to multimodal models along the way.
+
+Each architecture is LoRA fine-tuned into ten cultures on World Values Survey
+text. It then annotates the σ₃P₅ urban image set under a neutral prompt, which
+tests whether the persona effects seen with
 [urban imagery](https://arxiv.org/pdf/2605.29064) and
 [urban sentiment](https://minds-lab-utfpr.github.io/MLLMs-persona-evaluation/)
 still hold when the culture is in the weights rather than in the prompt. A
 second track trains one adapter per architecture on the country-level response
 distributions of [Cao et al. (NAACL 2025)](https://arxiv.org/abs/2502.07068), and
 a third on the US subpopulation distributions of
-[SubPOP (Suh et al., 2025)](https://arxiv.org/abs/2502.16761).
+[SubPOP (Suh et al., 2025)](https://arxiv.org/abs/2502.16761). The main
+repository reads these as its `global` and `subpop` arms.
 
 This README is how to run the code. The method, the metrics and the findings are
 in the paper.
@@ -49,7 +55,7 @@ labels and CultureLLM's WVS data. A clone placed next to them works unchanged.
 | 2 | **Training**: ten cultures per architecture | `./scripts/02_train_culture_models.sh` | CUDA GPU or Apple Silicon |
 | 3 | **Annotation**: matched base and fine-tuned passes | `./scripts/03_run_annotation.sh` | stage 2, the image set |
 | 4 | **Evaluation**: metrics and significance | `./scripts/04_evaluate.sh` | stage 3 |
-| 9 | **Publish**: adapters to the Hub collection | `./scripts/09_push_hub.sh push` | `HF_TOKEN` with write access |
+| 9 | **Publish**: adapters to the Hub | `./scripts/09_push_hub.sh push` | `HF_TOKEN` with write access |
 | 10 | **Distributional**: one Cao et al. adapter per architecture | `./scripts/10_train_distributional.sh` | SimLLMCultureDist clone, CUDA GPU |
 | 11 | **SubPOP**: one Suh et al. adapter per architecture | `./scripts/11_train_subpop.sh` | access to `jjssuh/subpop`, subpop clone, CUDA GPU |
 
@@ -122,10 +128,10 @@ The notebooks in `notebooks/` read the annotation records.
 
 ## Adapters
 
-Published to
-[Neemias/Culture-Steering-MLLM-Collection](https://huggingface.co/Neemias/Culture-Steering-MLLM-Collection),
-one repository with every adapter under `<culture>/<backbone>/<problem>`. Load
-one with `PeftModel.from_pretrained(base, repo_id, subfolder="english/qwen3_5_2b/cultural")`.
+The adapters will be published on Hugging Face with the paper, and their link
+will go here. They are laid out as one repository with every adapter under
+`<culture>/<backbone>/<problem>`, the same tree as `checkpoints/`. Until then,
+stage 2, 10 or 11 rebuilds any of them locally.
 
 The survey data are the World Values Survey's. Cao et al.'s tables are their
 per-country percentages from Wave 7 (Haerpfer et al., 2022). Their repository
