@@ -20,16 +20,17 @@ experiment, and extends [CultureLLM](https://arxiv.org/pdf/2402.10946) (Li et
 al., NeurIPS 2024) to multimodal models along the way.
 
 Each architecture is LoRA fine-tuned into ten cultures on World Values Survey
-text. It then annotates the σ₃P₅ urban image set under a neutral prompt, which
-tests whether the persona effects seen with
-[urban imagery](https://arxiv.org/pdf/2605.29064) and
-[urban sentiment](https://minds-lab-utfpr.github.io/MLLMs-persona-evaluation/)
-still hold when the culture is in the weights rather than in the prompt. A
-second track trains one adapter per architecture on the country-level response
-distributions of [Cao et al. (NAACL 2025)](https://arxiv.org/abs/2502.07068), and
-a third on the US subpopulation distributions of
+text. A second track trains one adapter per architecture on the country-level
+response distributions of [Cao et al. (NAACL 2025)](https://arxiv.org/abs/2502.07068),
+and a third on the US subpopulation distributions of
 [SubPOP (Suh et al., 2025)](https://arxiv.org/abs/2502.16761). The main
 repository reads these as its `global` and `subpop` arms.
+
+Beyond the paper, stages 3 and 4 annotate the σ₃P₅ urban image set with the
+cultural adapters under a neutral prompt. They test whether the persona effects
+seen with [urban imagery](https://arxiv.org/pdf/2605.29064) and
+[urban sentiment](https://minds-lab-utfpr.github.io/MLLMs-persona-evaluation/)
+still hold when the culture is in the weights rather than in the prompt.
 
 This README is how to run the code. The method, the metrics and the findings are
 in the paper.
