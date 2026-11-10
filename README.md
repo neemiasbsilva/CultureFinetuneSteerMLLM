@@ -113,8 +113,9 @@ reference protocol keeps. If stage 10 runs out of memory, `batch_size: 4` with
 Stage 11 fetches the gated SubPOP tables at a pinned revision and trains one
 adapter per architecture under the pseudo-culture `subpop`, following Suh et
 al.'s QA steering prompt, forward-KL loss and recipe, then scores SubPOP-Eval
-with the adapter on and off. Both stages also take `MODELS="muse_glimmer_30b"`,
-which trains in 4-bit and needs the card to itself.
+with the adapter on and off. Both stages ship a config for every WVS backbone
+except `phi4`, and default to `qwen3_vl_2b`. `muse_glimmer_30b`, `gemma4_31b`
+and `qwen3_27b` train in 4-bit and need the card to themselves.
 
 ## Artifacts
 
