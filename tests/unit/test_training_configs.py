@@ -102,21 +102,39 @@ def test_the_small_new_models_keep_the_shared_effective_batch_of_sixteen(
     assert train_cfg["batch_size"] * train_cfg["gradient_accumulation"] == 16
 
 
-@pytest.mark.parametrize("track", ["distributional", "subpop"])
-def test_the_30b_first_token_configs_fit_the_card_the_way_the_wvs_config_does(
-    track: str,
+FIRST_TOKEN_TRACKS = ("distributional", "subpop")
+FIRST_TOKEN_CONFIGS = sorted(
+    p
+    for track in FIRST_TOKEN_TRACKS
+    for p in CONFIG_DIR.glob(f"*_{track}.yaml")
+    if not p.stem.startswith("qwen3_vl_2b_")
+)
+
+
+def _split(path: Path) -> tuple[str, str]:
+    model_key, _, track = path.stem.rpartition("_")
+    return model_key, track
+
+
+@pytest.mark.parametrize("path", FIRST_TOKEN_CONFIGS, ids=lambda p: p.stem)
+def test_quantized_first_token_configs_fit_the_card_the_way_the_wvs_config_does(
+    path: Path,
 ) -> None:
-    train_cfg = _load(CONFIG_DIR / f"muse_glimmer_30b_{track}.yaml")["training"]
-    base_cfg = _load(CONFIG_DIR / "muse_glimmer_30b.yaml")["training"]
+    model_key, _ = _split(path)
+    train_cfg = _load(path)["training"]
+    base_cfg = _load(CONFIG_DIR / f"{model_key}.yaml")["training"]
 
-    assert train_cfg["quantization"] == base_cfg["quantization"] == "4bit"
-    assert train_cfg["gradient_checkpointing"] is True
+    assert train_cfg.get("quantization") == base_cfg.get("quantization")
+    if train_cfg.get("quantization"):
+        assert train_cfg["gradient_checkpointing"] is True
 
 
-@pytest.mark.parametrize("track", ["distributional", "subpop"])
-def test_the_30b_first_token_configs_keep_the_recipe_of_the_2b_ones(track: str) -> None:
-    muse = _load(CONFIG_DIR / f"muse_glimmer_30b_{track}.yaml")
+@pytest.mark.parametrize("path", FIRST_TOKEN_CONFIGS, ids=lambda p: p.stem)
+def test_every_first_token_config_keeps_the_recipe_of_the_2b_one(path: Path) -> None:
+    model_key, track = _split(path)
+    cfg = _load(path)
     qwen = _load(CONFIG_DIR / f"qwen3_vl_2b_{track}.yaml")
+    base = _load(CONFIG_DIR / f"{model_key}.yaml")
     card_bound = {"batch_size", "gradient_accumulation", "gradient_checkpointing", "quantization"}
     per_backbone = {"eval_steps", "save_steps", "early_stopping_patience", "max_seq_len"}
 
@@ -129,11 +147,16 @@ def test_the_30b_first_token_configs_keep_the_recipe_of_the_2b_ones(track: str) 
     def patience_in_steps(cfg: dict[str, Any]) -> int:
         return int(cfg["training"]["early_stopping_patience"] * cfg["training"]["eval_steps"])
 
-    assert muse["lora"] == qwen["lora"]
-    assert muse["data"] == qwen["data"]
-    assert recipe(muse) == recipe(qwen)
-    assert effective_batch(muse) == effective_batch(qwen)
-    assert patience_in_steps(muse) == patience_in_steps(qwen)
+    assert cfg["model"]["id"] == base["model"]["id"]
+    assert get_model_key(cfg, path) == model_key
+    assert resolve_modality(cfg["model"]) == resolve_modality(base["model"])
+    assert cfg["lora"] == qwen["lora"]
+    assert cfg["data"] == qwen["data"]
+    assert cfg["condition"] == qwen["condition"] == track
+    assert cfg["mlflow"] == qwen["mlflow"]
+    assert recipe(cfg) == recipe(qwen)
+    assert effective_batch(cfg) == effective_batch(qwen)
+    assert patience_in_steps(cfg) == patience_in_steps(qwen)
 
 
 def test_a_text_only_modality_selects_the_tokenizer_side_lora_defaults() -> None:
